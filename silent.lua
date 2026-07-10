@@ -67,7 +67,7 @@ local lastTargetPos = {}
 local targetVelocities = {}
 local currentTarget = nil
 local currentTargetPlayer = nil
-local enabledToggleElement = nil -- Store reference to toggle element
+local enabledToggleElement = nil
 
 -- ===== CREATE FOV CIRCLE =====
 local function createFOVCircle()
@@ -88,7 +88,7 @@ local function createFOVCircle()
     outline.AnchorPoint = Vector2.new(0.5, 0.5)
     outline.BackgroundTransparency = 1
     outline.BorderSizePixel = 0
-    outline.Image = "rbxassetid://8789695013"
+    outline.Image = "rbxassetid://10891594364"  -- Working glow circle crosshair
     outline.ImageColor3 = config.fovColor
     outline.ImageTransparency = config.fovTransparency
     outline.ScaleType = Enum.ScaleType.Fit
@@ -100,7 +100,7 @@ local function createFOVCircle()
     centerDot.AnchorPoint = Vector2.new(0.5, 0.5)
     centerDot.BackgroundTransparency = 1
     centerDot.BorderSizePixel = 0
-    centerDot.Image = "rbxassetid://8789695013"
+    centerDot.Image = "rbxassetid://10891594364"
     centerDot.ImageColor3 = config.fovColor
     centerDot.ImageTransparency = 0
     centerDot.ScaleType = Enum.ScaleType.Fit
@@ -325,9 +325,7 @@ end)
 local function setEnabled(value)
     config.enabled = value
     
-    -- Update the toggle element without calling its Set method
     if enabledToggleElement then
-        -- Use pcall to handle any internal errors
         pcall(function()
             enabledToggleElement:Set(value)
         end)
@@ -353,10 +351,8 @@ local function updateToggleKeybind()
     toggleKeyConnection = UserInputService.InputBegan:Connect(function(input, gameProcessed)
         if gameProcessed then return end
         if input.KeyCode == Enum.KeyCode[config.toggleKey] then
-            -- Toggle the config value directly
             config.enabled = not config.enabled
             
-            -- Update UI elements without creating loops
             if enabledToggleElement then
                 pcall(function()
                     enabledToggleElement:Set(config.enabled)
@@ -378,11 +374,10 @@ end
 -- ===== CREATE GUI =====
 local Window = WindUI:CreateWindow({
     Title = "Silent Aim",
-    Icon = "lucide:crosshair", -- lucide icon
+    Icon = "crosshair",
     Author = "by Prayut",
     Folder = "SilentAim",
     
-    -- Window settings
     Size = UDim2.fromOffset(600, 500),
     MinSize = Vector2.new(560, 350),
     MaxSize = Vector2.new(850, 560),
@@ -395,7 +390,6 @@ local Window = WindUI:CreateWindow({
     HideSearchBar = true,
     ScrollBarEnabled = false,
     
-    -- User profile (non-anonymous)
     User = {
         Enabled = true,
         Anonymous = false,
@@ -431,7 +425,6 @@ local enabledToggle = MainTab:Toggle({
     Desc = "Toggle silent aim on/off",
     Default = config.enabled,
     Callback = function(value) 
-        -- Only update if the value actually changed
         if config.enabled ~= value then
             config.enabled = value
             
