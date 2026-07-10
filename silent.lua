@@ -29,13 +29,13 @@ local WEAPON_SETTINGS = {
     SwayFactor = 0.08,
 }
 
--- ===== CHANT PACKAGE LIST =====
+-- ===== CHANT PACKAGE LIST (FIXED: ScottishRSG not ScottishRSC) =====
 local chantPackages = {
     "American", "Danish", "Dutch", "English", "English1FG", "EnglishGuard",
     "French", "FrenchGuard", "FrenchGuard2", "GermanBrunswick", "GermanKaiser",
     "GermanKing", "Irish", "Italian", "ItalianGuard", "Ottoman", "Polish",
     "Polish2", "PolishCongress", "Romanian", "Russian", "Scottish",
-    "Scottish42nd", "Scottish71st", "ScottishRSC", "Spanish", "Swedish",
+    "Scottish42nd", "Scottish71st", "ScottishRSG", "Spanish", "Swedish",
     "Swiss", "Zulu"
 }
 
@@ -110,26 +110,68 @@ local autoCalc = {
     remoteName = nil,
 }
 
--- ===== CHANT CHANGER =====
+-- ===== CHANT CHANGER (FIXED: Uses ObjectValue) =====
 local function setChantPackage(packageName)
     if not plr or not packageName then return end
+    
+    -- Get the ChantPackage ObjectValue
     local chantValue = plr:FindFirstChild("ChantPackage")
     if not chantValue and plr.Character then
         chantValue = plr.Character:FindFirstChild("ChantPackage")
     end
+    
     if chantValue then
-        pcall(function()
-            chantValue.Value = packageName
-            config.chantPackage = packageName
-            print("Chant package changed to: " .. packageName)
-        end)
+        -- Find the chant object in ReplicatedStorage.Chants
+        local chantsFolder = ReplicatedStorage:FindFirstChild("Chants")
+        if chantsFolder then
+            local chantObject = chantsFolder:FindFirstChild(packageName)
+            if chantObject then
+                pcall(function()
+                    chantValue.Value = chantObject
+                    config.chantPackage = packageName
+                    print("Chant package changed to: " .. packageName)
+                end)
+            else
+                warn("Chant object not found: " .. packageName)
+            end
+        else
+            warn("Chants folder not found in ReplicatedStorage")
+        end
     else
-        local newChantValue = Instance.new("StringValue")
-        newChantValue.Name = "ChantPackage"
-        newChantValue.Value = packageName
-        newChantValue.Parent = plr.Character or plr
-        config.chantPackage = packageName
-        print("Created and set Chant package to: " .. packageName)
+        -- Create the ObjectValue if it doesn't exist
+        local chantsFolder = ReplicatedStorage:FindFirstChild("Chants")
+        if chantsFolder then
+            local chantObject = chantsFolder:FindFirstChild(packageName)
+            if chantObject then
+                local newChantValue = Instance.new("ObjectValue")
+                newChantValue.Name = "ChantPackage"
+                newChantValue.Value = chantObject
+                newChantValue.Parent = plr.Character or plr
+                config.chantPackage = packageName
+                print("Created and set Chant package to: " .. packageName)
+            end
+        end
+    end
+end
+
+-- ===== INITIALIZE CURRENT CHANT =====
+local function initChantPackage()
+    if not plr then return end
+    
+    local chantValue = plr:FindFirstChild("ChantPackage")
+    if not chantValue and plr.Character then
+        chantValue = plr.Character:FindFirstChild("ChantPackage")
+    end
+    
+    if chantValue and chantValue.Value then
+        -- Get the name from the ObjectValue
+        local chantName = chantValue.Value.Name
+        if chantName then
+            config.chantPackage = chantName
+            print("Current chant package: " .. chantName)
+        end
+    else
+        print("No ChantPackage found. Use the Chant Changer to set one.")
     end
 end
 
@@ -732,7 +774,6 @@ HitboxGroup:AddSlider("HitboxSize", {
     end
 })
 
--- FIX: ColorPicker added via Label:AddColorPicker
 local colorLabel = HitboxGroup:AddLabel("Hitbox Color")
 colorLabel:AddColorPicker("HitboxColor", {
     Default = config.hitboxColor,
@@ -799,7 +840,6 @@ ChantGroup:AddDropdown("ChantPackage", {
     end
 })
 
--- FIX: Button uses Func not Callback
 ChantGroup:AddButton({
     Text = "Refresh Chant",
     Func = function()
@@ -821,7 +861,8 @@ ChantGroup:AddButton({
 -- ===== SETTINGS TAB =====
 local SettingsGroup = SettingsTab:AddLeftGroupbox("Keybinds")
 
-SettingsGroup:AddKeyPicker("ToggleKey", {
+local keyLabel = SettingsGroup:AddLabel("Toggle Key")
+keyLabel:AddKeyPicker("ToggleKey", {
     Text = "Toggle Key",
     Default = "Delete",
     Mode = "Toggle",
@@ -842,7 +883,6 @@ SettingsGroup:AddKeyPicker("ToggleKey", {
 
 local ActionsGroup = SettingsTab:AddRightGroupbox("Actions")
 
--- FIX: Button uses Func not Callback
 ActionsGroup:AddButton({
     Text = "Refresh Hitboxes",
     Func = function()
@@ -881,7 +921,6 @@ ThemeManager:ApplyToTab(SettingsTab)
 -- ===== INITIALIZATION =====
 createFOVCircle()
 
--- Setup toggle keybind
 connections.toggleKeybind = UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
     if input.KeyCode == Enum.KeyCode[config.toggleKey] then
@@ -890,18 +929,15 @@ connections.toggleKeybind = UserInputService.InputBegan:Connect(function(input, 
     end
 end)
 
--- Find Hit remote
 task.wait(1)
 findHitRemote()
 
--- If hitbox extender is enabled by default, hook FastCastRedux
 if config.hitboxEnabled then
     task.wait(0.5)
     hookFastCastRedux()
     hookHitRemote()
 end
 
--- Start connections
 connections.renderStepped = RunService.RenderStepped:Connect(function()
     pcall(onRenderStepped)
     pcall(updateFOVPosition)
@@ -928,8 +964,8 @@ connections.characterAdded = plr.CharacterAdded:Connect(function(character)
     
     task.wait(0.5)
     local chantValue = character:FindFirstChild("ChantPackage")
-    if chantValue then
-        config.chantPackage = chantValue.Value
+    if chantValue and chantValue.Value then
+        config.chantPackage = chantValue.Value.Name
     end
 end)
 
@@ -947,6 +983,10 @@ Players.PlayerRemoving:Connect(function(player)
         removeHitboxForPlayer(player)
     end
 end)
+
+-- Initialize chant
+task.wait(0.5)
+initChantPackage()
 
 print("Silent Aim loaded successfully!")
 print("Musket Settings Applied:")
