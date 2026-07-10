@@ -61,8 +61,8 @@ local config = {
     autoPrediction = true,
     gravityCompensation = 1.0,
     autoCalibration = true,
-    adaptiveCalibration = true, -- New: Adjust based on hit/miss
-    calibrationRate = 0.05, -- How much to adjust per shot
+    adaptiveCalibration = true,
+    calibrationRate = 0.05,
 }
 
 -- ===== AUTO-CALCULATION SYSTEM =====
@@ -71,86 +71,140 @@ local autoCalc = {
     pingSamples = {},
     pingSampleCount = 0,
     
-    -- Hit tracking
     totalShots = 0,
     totalHits = 0,
     hitRate = 0,
     lastShotTime = 0,
-    shotCooldown = 0.5, -- Minimum time between shots for tracking
+    shotCooldown = 0.5,
     
-    -- Calibration adjustments
     lastAdjustment = 0,
     adjustmentDirection = 0,
     
-    -- Current settings being calibrated
-    calibrationTarget = "prediction", -- "prediction", "drop", or "velocity"
+    calibrationTarget = "prediction",
     calibrationValues = {
         prediction = { min = 0.05, max = 0.5, current = config.prediction },
         bulletDrop = { min = 0, max = 30, current = config.bulletDrop },
         bulletVelocity = { min = 100, max = 2000, current = config.bulletVelocity },
         gravityCompensation = { min = 0.5, max = 1.5, current = config.gravityCompensation }
     },
+    
+    -- Remote detection
+    remoteFound = false,
+    remoteType = nil,
+    remotePath = nil,
+    remoteName = nil,
 }
 
--- ===== INTERCEPT HIT REMOTE =====
+-- ===== INTERCEPT HIT REMOTE (SPECIFIC PATH) =====
 local hitRemote = nil
 local remoteConnection = nil
 
-local function findHitRemote()
-    -- Search for the "Hit" remote in ReplicatedStorage
-    for _, remote in ipairs(ReplicatedStorage:GetChildren()) do
-        if remote.Name == "Hit" then
-            return remote
+local function setupHitRemoteListener()
+    print("Looking for Hit remote at: ReplicatedStorage.Tools.Components.Muzzle.Hit")
+    
+    -- Try the specific path first
+    local tools = ReplicatedStorage:FindFirstChild("Tools")
+    if tools then
+        local components = tools:FindFirstChild("Components")
+        if components then
+            local muzzle = components:FindFirstChild("Muzzle")
+            if muzzle then
+                hitRemote = muzzle:FindFirstChild("Hit")
+                if hitRemote then
+                    print("Found Hit remote at the expected location!")
+                    autoCalc.remoteFound = true
+                    autoCalc.remoteName = hitRemote.Name
+                    autoCalc.remotePath = "ReplicatedStorage.Tools.Components.Muzzle.Hit"
+                    autoCalc.remoteType = hitRemote:IsA("RemoteEvent") and "RemoteEvent" or "RemoteFunction"
+                    
+                    -- Setup listener based on remote type
+                    if hitRemote:IsA("RemoteEvent") then
+                        remoteConnection = hitRemote.OnClientEvent:Connect(function(...)
+                            onHitDetected(...)
+                        end)
+                        print("Connected to Hit RemoteEvent!")
+                        return true
+                    elseif hitRemote:IsA("RemoteFunction") then
+                        local oldInvoke = hitRemote.OnClientInvoke
+                        hitRemote.OnClientInvoke = function(...)
+                            onHitDetected(...)
+                            if oldInvoke then
+                                return oldInvoke(...)
+                            end
+                        end
+                        print("Connected to Hit RemoteFunction!")
+                        return true
+                    end
+                else
+                    print("Hit remote not found in Muzzle. Searching all remotes...")
+                end
+            else
+                print("Muzzle folder not found. Searching all remotes...")
+            end
+        else
+            print("Components folder not found. Searching all remotes...")
         end
+    else
+        print("Tools folder not found. Searching all remotes...")
     end
     
-    -- Search in other common locations
-    local locations = {
-        ReplicatedStorage:FindFirstChild("Remotes"),
-        ReplicatedStorage:FindFirstChild("Network"),
-        ReplicatedStorage:FindFirstChild("Events"),
-        game:GetService("ReplicatedFirst"),
-    }
-    
-    for _, location in ipairs(locations) do
-        if location then
-            for _, remote in ipairs(location:GetChildren()) do
-                if remote.Name == "Hit" then
-                    return remote
-                end
+    -- Fallback: Search for any remote named "Hit"
+    print("Searching for any remote named 'Hit'...")
+    local function searchForHit(instance)
+        if instance:IsA("RemoteEvent") or instance:IsA("RemoteFunction") then
+            if instance.Name == "Hit" then
+                return instance
             end
         end
+        
+        for _, child in ipairs(instance:GetChildren()) do
+            local result = searchForHit(child)
+            if result then
+                return result
+            end
+        end
+        return nil
     end
     
-    return nil
-end
-
-local function setupHitRemoteListener()
-    -- Find the hit remote
-    hitRemote = findHitRemote()
-    
+    hitRemote = searchForHit(ReplicatedStorage)
     if hitRemote then
-        print("Found Hit remote! Setting up listener...")
+        print("Found Hit remote at: " .. getPath(hitRemote))
+        autoCalc.remoteFound = true
+        autoCalc.remoteName = hitRemote.Name
+        autoCalc.remotePath = getPath(hitRemote)
+        autoCalc.remoteType = hitRemote:IsA("RemoteEvent") and "RemoteEvent" or "RemoteFunction"
         
-        -- Listen for the remote being fired (this is when a hit happens)
-        remoteConnection = hitRemote.OnClientEvent:Connect(function(...)
-            onHitDetected(...)
-        end)
-        
-        -- Also listen for OnClientInvoke if it's a callback
-        if hitRemote.OnClientInvoke then
+        if hitRemote:IsA("RemoteEvent") then
+            remoteConnection = hitRemote.OnClientEvent:Connect(function(...)
+                onHitDetected(...)
+            end)
+            print("Connected to Hit RemoteEvent!")
+            return true
+        elseif hitRemote:IsA("RemoteFunction") then
             local oldInvoke = hitRemote.OnClientInvoke
             hitRemote.OnClientInvoke = function(...)
                 onHitDetected(...)
-                return oldInvoke and oldInvoke(...)
+                if oldInvoke then
+                    return oldInvoke(...)
+                end
             end
+            print("Connected to Hit RemoteFunction!")
+            return true
         end
-        
-        return true
-    else
-        print("Could not find Hit remote. Will keep searching...")
-        return false
     end
+    
+    print("Could not find Hit remote. Will keep searching...")
+    return false
+end
+
+local function getPath(instance)
+    local path = {instance.Name}
+    local parent = instance.Parent
+    while parent and parent ~= game do
+        table.insert(path, 1, parent.Name)
+        parent = parent.Parent
+    end
+    return table.concat(path, ".")
 end
 
 -- ===== ON HIT DETECTED =====
@@ -162,7 +216,11 @@ local function onHitDetected(...)
     
     print("HIT DETECTED! Hit rate: " .. math.floor(autoCalc.hitRate * 100) .. "% (" .. autoCalc.totalHits .. "/" .. autoCalc.totalShots .. ")")
     
-    -- If we have enough data, perform adaptive calibration
+    -- Update UI if it exists
+    if guiElements.hitRateText then
+        guiElements.hitRateText:SetDesc("Current hit rate: " .. math.floor(autoCalc.hitRate * 100) .. "% (" .. autoCalc.totalHits .. "/" .. autoCalc.totalShots .. ")")
+    end
+    
     if config.adaptiveCalibration and autoCalc.totalShots >= 5 then
         performAdaptiveCalibration()
     end
@@ -170,17 +228,18 @@ end
 
 -- ===== TRACK SHOT ATTEMPTS =====
 local function trackShotAttempt()
-    -- This function is called when the player fires a weapon
-    -- We need to detect when the player shoots (mouse click or keypress)
     local currentTime = tick()
     if currentTime - autoCalc.lastShotTime > autoCalc.shotCooldown then
         autoCalc.totalShots = autoCalc.totalShots + 1
         autoCalc.lastShotTime = currentTime
         
-        -- If we've fired but haven't gotten a hit in a while, we might be missing
+        -- Update UI
+        if guiElements.hitRateText then
+            guiElements.hitRateText:SetDesc("Current hit rate: " .. math.floor(autoCalc.hitRate * 100) .. "% (" .. autoCalc.totalHits .. "/" .. autoCalc.totalShots .. ")")
+        end
+        
         if autoCalc.totalShots - autoCalc.totalHits > 10 then
-            -- Miss rate is too high, trigger aggressive recalibration
-            performAdaptiveCalibration(true) -- Force calibration
+            performAdaptiveCalibration(true)
         end
     end
 end
@@ -189,31 +248,24 @@ end
 local function performAdaptiveCalibration(force)
     if not config.adaptiveCalibration and not force then return end
     
-    local target = autoCalc.calibrationTarget
     local hitRate = autoCalc.hitRate
     
-    -- Only calibrate if we have enough data
     if autoCalc.totalShots < 10 and not force then return end
     
-    -- Determine if we're hitting too much or too little
-    local idealHitRate = 0.7 -- 70% is ideal for aimbot
+    local idealHitRate = 0.7
     local error = hitRate - idealHitRate
     
     if math.abs(error) < 0.05 and not force then
-        -- We're close to ideal, make small adjustments
         autoCalc.adjustmentDirection = 0
         return
     end
     
-    -- Calculate adjustment based on error
     local adjustment = config.calibrationRate * math.clamp(error * 2, -0.1, 0.1)
     
-    -- Add some randomness to prevent getting stuck
     if force then
         adjustment = (math.random() - 0.5) * 0.1
     end
     
-    -- Cycle through calibration targets
     local targets = {"prediction", "bulletDrop", "gravityCompensation", "bulletVelocity"}
     local targetIndex = 1
     
@@ -224,11 +276,9 @@ local function performAdaptiveCalibration(force)
         end
     end
     
-    -- Move to next target after each adjustment
     targetIndex = targetIndex % #targets + 1
     autoCalc.calibrationTarget = targets[targetIndex]
     
-    -- Apply adjustment to current target
     local targetConfig = autoCalc.calibrationValues[autoCalc.calibrationTarget]
     
     if targetConfig then
@@ -236,7 +286,6 @@ local function performAdaptiveCalibration(force)
         newValue = math.clamp(newValue, targetConfig.min, targetConfig.max)
         targetConfig.current = newValue
         
-        -- Apply to config
         if autoCalc.calibrationTarget == "prediction" then
             config.prediction = newValue
         elseif autoCalc.calibrationTarget == "bulletDrop" then
@@ -249,6 +298,11 @@ local function performAdaptiveCalibration(force)
         
         print("Adaptive calibration: " .. autoCalc.calibrationTarget .. " -> " .. string.format("%.3f", newValue))
         print("Current hit rate: " .. math.floor(hitRate * 100) .. "%")
+        
+        -- Update UI
+        if guiElements.calibrationTargetText then
+            guiElements.calibrationTargetText:SetDesc("Currently calibrating: " .. autoCalc.calibrationTarget)
+        end
     end
 end
 
@@ -380,6 +434,7 @@ local targetVelocities = {}
 local currentTarget = nil
 local currentTargetPlayer = nil
 local enabledToggleElement = nil
+local guiElements = {}
 
 -- ===== CREATE FOV CIRCLE =====
 local function createFOVCircle()
@@ -610,11 +665,8 @@ local function onRenderStepped()
     end
     
     -- Track mouse clicks for shot attempts
-    local mouse = plr:GetMouse()
-    if mouse then
-        if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
-            trackShotAttempt()
-        end
+    if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
+        trackShotAttempt()
     end
     
     local target, player = getClosestTarget()
@@ -959,17 +1011,46 @@ CalibrationTab:Button({
         autoCalc.totalHits = 0
         autoCalc.hitRate = 0
         print("Statistics reset!")
+        if guiElements.hitRateText then
+            guiElements.hitRateText:SetDesc("Current hit rate: 0% (0/0)")
+        end
     end
 })
 
-CalibrationTab:Paragraph({
+-- Hit rate display
+local hitRateText = CalibrationTab:Paragraph({
     Title = "Hit Statistics",
-    Desc = "Current hit rate: " .. math.floor(autoCalc.hitRate * 100) .. "% (" .. autoCalc.totalHits .. "/" .. autoCalc.totalShots .. ")",
+    Desc = "Current hit rate: 0% (0/0)",
 })
+guiElements.hitRateText = hitRateText
 
-CalibrationTab:Paragraph({
+local calibrationTargetText = CalibrationTab:Paragraph({
     Title = "Active Calibration Target",
     Desc = "Currently calibrating: " .. autoCalc.calibrationTarget,
+})
+guiElements.calibrationTargetText = calibrationTargetText
+
+local remoteStatusText = CalibrationTab:Paragraph({
+    Title = "Remote Status",
+    Desc = autoCalc.remoteFound and "Remote found: " .. autoCalc.remoteName .. " at " .. (autoCalc.remotePath or "unknown path") or "Remote not found",
+})
+guiElements.remoteStatusText = remoteStatusText
+
+CalibrationTab:Button({
+    Title = "Find Hit Remote",
+    Desc = "Manually search for the Hit remote",
+    Callback = function()
+        print("Manual remote search...")
+        setupHitRemoteListener()
+        if autoCalc.remoteFound then
+            print("Found remote: " .. autoCalc.remoteName)
+            if guiElements.remoteStatusText then
+                guiElements.remoteStatusText:SetDesc("Remote found: " .. autoCalc.remoteName .. " at " .. (autoCalc.remotePath or "unknown path"))
+            end
+        else
+            print("No remote found. Check console for search results.")
+        end
+    end
 })
 
 -- ===== FOV TAB =====
@@ -1048,7 +1129,7 @@ SettingsTab:Slider({
 -- ===== INITIAL SETUP =====
 updateToggleKeybind()
 
--- Setup hit remote listener
+-- Setup hit remote listener with specific path
 task.wait(1)
 local remoteFound = setupHitRemoteListener()
 
