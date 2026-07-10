@@ -1,4 +1,4 @@
--- ===== WINDUI LOADING =====
+-- ===== WINDUI LOADING WITH PROPER ERROR HANDLING =====
 local cloneref = (cloneref or clonereference or function(instance)
     return instance
 end)
@@ -6,31 +6,66 @@ end)
 local ReplicatedStorage = cloneref(game:GetService("ReplicatedStorage"))
 local RunService = cloneref(game:GetService("RunService"))
 
-local WindUI
+local WindUI = nil
 
-do
-    local ok, result = pcall(function()
-        return require("./src/Init")
-    end)
-
-    if ok then
-        WindUI = result
-    else
-        if RunService:IsStudio() or not writefile then
-            local windUI = ReplicatedStorage:FindFirstChild("WindUI")
-            if windUI then
-                WindUI = require(windUI:WaitForChild("Init"))
-            else
-                WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
-            end
-        else
-            WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
+-- Try multiple loading methods
+local function loadWindUI()
+    -- Method 1: Try require from ReplicatedStorage
+    local success, result = pcall(function()
+        local windUIModule = ReplicatedStorage:FindFirstChild("WindUI")
+        if windUIModule then
+            return require(windUIModule:WaitForChild("Init"))
         end
+        return nil
+    end)
+    
+    if success and result then
+        return result
     end
+    
+    -- Method 2: Try HTTP request (main)
+    success, result = pcall(function()
+        return loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
+    end)
+    
+    if success and result then
+        return result
+    end
+    
+    -- Method 3: Try alternative URL
+    success, result = pcall(function()
+        return loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
+    end)
+    
+    if success and result then
+        return result
+    end
+    
+    return nil
 end
 
+WindUI = loadWindUI()
+
 if not WindUI then
-    WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
+    warn("Failed to load WindUI! Please check your internet connection or try again later.")
+    -- Create a simple fallback UI
+    WindUI = {
+        CreateWindow = function()
+            return {
+                Tab = function() return {} end,
+                Toggle = function() return { Set = function() end } end,
+                Slider = function() return { Set = function() end } end,
+                Dropdown = function() return {} end,
+                Colorpicker = function() return {} end,
+                Keybind = function() return {} end,
+                Button = function() return {} end,
+                Paragraph = function() return { SetDesc = function() end } end,
+                SetToggleKey = function() end,
+                Destroy = function() end,
+            }
+        end
+    }
+    print("Using fallback UI mode (WindUI failed to load)")
 end
 
 -- ===== SERVICES =====
