@@ -1,4 +1,3 @@
--- ===== WINDUI LOADING WITH PROPER ERROR HANDLING =====
 local cloneref = (cloneref or clonereference or function(instance)
     return instance
 end)
