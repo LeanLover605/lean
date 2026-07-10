@@ -38,8 +38,189 @@ local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 local Camera = Workspace.CurrentCamera
+local Stats = game:GetService("Stats")
 
 local plr = Players.LocalPlayer
+
+-- ===== AUTO-CALCULATION SYSTEM =====
+local autoCalc = {
+    -- Bullet velocity detection
+    detectedVelocity = nil,
+    velocitySamples = {},
+    velocitySampleCount = 0,
+    maxSamples = 5,
+    
+    -- Bullet drop detection
+    detectedDrop = nil,
+    dropSamples = {},
+    dropSampleCount = 0,
+    
+    -- Ping detection
+    ping = 0.05, -- Default 50ms
+    pingSamples = {},
+    pingSampleCount = 0,
+}
+
+-- ===== PING DETECTION =====
+local function detectPing()
+    -- Try to get ping from Stats service
+    local statsData = Stats:FindFirstChild("Data")
+    if statsData then
+        local ping = statsData:FindFirstChild("Ping")
+        if ping and type(ping.Value) == "number" then
+            -- Store ping samples
+            autoCalc.pingSamples[#autoCalc.pingSamples + 1] = ping.Value / 1000
+            autoCalc.pingSampleCount = autoCalc.pingSampleCount + 1
+            
+            -- Average ping samples
+            if autoCalc.pingSampleCount >= 5 then
+                local total = 0
+                for i = #autoCalc.pingSamples - 4, #autoCalc.pingSamples do
+                    total = total + autoCalc.pingSamples[i]
+                end
+                autoCalc.ping = total / 5
+                -- Remove old samples
+                table.remove(autoCalc.pingSamples, 1)
+            end
+        end
+    end
+    
+    -- Alternative: Use network stats
+    if not autoCalc.ping or autoCalc.ping <= 0 then
+        local networkStats = Stats:FindFirstChild("Network")
+        if networkStats then
+            local ping = networkStats:FindFirstChild("Ping")
+            if ping and type(ping.Value) == "number" then
+                autoCalc.ping = ping.Value / 1000
+            end
+        end
+    end
+    
+    return autoCalc.ping
+end
+
+-- ===== BULLET VELOCITY DETECTION =====
+local function detectBulletVelocity()
+    -- Method 1: Check for known weapon configurations
+    local weapons = {}
+    
+    -- Search for weapons in the player's character
+    if plr.Character then
+        local tools = plr.Character:GetChildren()
+        for _, tool in ipairs(tools) do
+            if tool:IsA("Tool") then
+                -- Look for projectile properties in the tool
+                local projectile = tool:FindFirstChild("Projectile")
+                if projectile then
+                    local speed = projectile:FindFirstChild("Speed")
+                    if speed and type(speed.Value) == "number" then
+                        return speed.Value
+                    end
+                end
+                
+                -- Look for handle with velocity property
+                local handle = tool:FindFirstChild("Handle")
+                if handle then
+                    local velocity = handle:FindFirstChild("Velocity")
+                    if velocity and type(velocity.Value) == "number" then
+                        return velocity.Value
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Method 2: Analyze projectile motion
+    -- (This requires observing projectiles in the workspace)
+    for _, obj in ipairs(Workspace:GetChildren()) do
+        -- Check for common projectile names
+        if obj.Name:match("Projectile") or obj.Name:match("Bullet") then
+            local velocity = obj:FindFirstChild("Velocity")
+            if velocity and type(velocity.Value) == "number" then
+                return velocity.Value
+            end
+        end
+    end
+    
+    -- Method 3: Use game-specific detection
+    -- Try to find from ReplicatedStorage
+    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+    if remotes then
+        for _, remote in ipairs(remotes:GetChildren()) do
+            if remote.Name:match("Weapon") or remote.Name:match("Fire") then
+                -- Could analyze remote arguments here
+            end
+        end
+    end
+    
+    -- If nothing found, return a default or nil
+    return nil
+end
+
+-- ===== BULLET DROP DETECTION =====
+local function detectBulletDrop()
+    -- Method 1: Check for gravity in game configuration
+    local gravity = Workspace:FindFirstChild("Gravity")
+    if gravity and type(gravity.Value) == "number" then
+        -- Bullet drop is usually a multiplier of gravity
+        return gravity.Value * 0.5 -- Estimate
+    end
+    
+    -- Method 2: Analyze projectile paths
+    -- Look for projectiles with trajectory patterns
+    for _, obj in ipairs(Workspace:GetChildren()) do
+        if obj.Name:match("Projectile") or obj.Name:match("Bullet") then
+            -- Check if projectile has drop property
+            local drop = obj:FindFirstChild("Drop")
+            if drop and type(drop.Value) == "number" then
+                return drop.Value
+            end
+            
+            -- Check for trajectory
+            local trajectory = obj:FindFirstChild("Trajectory")
+            if trajectory then
+                -- Could analyze trajectory path for drop
+            end
+        end
+    end
+    
+    -- Method 3: Use game-specific known values
+    -- Many FPS games use ~5-15 for bullet drop
+    return nil
+end
+
+-- ===== PERFORMANCE TESTING =====
+local function performAutoCalibration()
+    print("Starting auto-calibration...")
+    
+    -- Detect ping
+    autoCalc.ping = detectPing()
+    print("Detected ping: " .. math.floor(autoCalc.ping * 1000) .. "ms")
+    
+    -- Detect bullet velocity
+    local velocity = detectBulletVelocity()
+    if velocity then
+        config.bulletVelocity = velocity
+        print("Detected bullet velocity: " .. velocity .. " studs/s")
+    else
+        print("Could not auto-detect bullet velocity. Using manual setting.")
+    end
+    
+    -- Detect bullet drop
+    local drop = detectBulletDrop()
+    if drop then
+        config.bulletDrop = drop
+        print("Detected bullet drop: " .. drop .. " studs/s²")
+    else
+        print("Could not auto-detect bullet drop. Using manual setting.")
+    end
+    
+    -- Auto-adjust prediction based on ping
+    if autoCalc.ping > 0 then
+        config.prediction = math.clamp(autoCalc.ping * 2, 0.05, 0.3)
+        print("Auto-adjusted prediction to: " .. config.prediction)
+    end
+end
 
 -- ===== DEFAULT CONFIGURATION =====
 local config = {
@@ -54,10 +235,12 @@ local config = {
     guikey = "RightShift",
     smoothing = 0.3,
     wallCheck = false,
-    prediction = 0.15,
-    bulletVelocity = 500,
-    bulletDrop = 5,
-    autoPrediction = true
+    prediction = 0.15,  -- Will be auto-adjusted
+    bulletVelocity = 500, -- Will be auto-detected
+    bulletDrop = 5,       -- Will be auto-detected
+    autoPrediction = true,
+    gravityCompensation = 1.0,
+    autoCalibration = true -- New: Toggle for auto-calibration
 }
 
 -- ===== STATE =====
@@ -88,7 +271,7 @@ local function createFOVCircle()
     outline.AnchorPoint = Vector2.new(0.5, 0.5)
     outline.BackgroundTransparency = 1
     outline.BorderSizePixel = 0
-    outline.Image = "rbxassetid://10891594364"  -- Working glow circle crosshair
+    outline.Image = "rbxassetid://10891594364"
     outline.ImageColor3 = config.fovColor
     outline.ImageTransparency = config.fovTransparency
     outline.ScaleType = Enum.ScaleType.Fit
@@ -151,7 +334,11 @@ local function updateTargetVelocities()
                 
                 if lastTargetPos[player] then
                     local delta = currentPos - lastTargetPos[player]
-                    targetVelocities[player] = delta / dt
+                    if targetVelocities[player] then
+                        targetVelocities[player] = targetVelocities[player] * 0.7 + (delta / dt) * 0.3
+                    else
+                        targetVelocities[player] = delta / dt
+                    end
                 else
                     targetVelocities[player] = Vector3.new(0, 0, 0)
                 end
@@ -172,20 +359,44 @@ local function predictPosition(targetPart, player)
     end
     
     local basePosition = targetPart.Position
+    local cameraPos = Camera.CFrame.Position
     
+    -- Get ping compensation
+    local pingCompensation = autoCalc.ping or 0.05
+    
+    -- Calculate initial distance and travel time
+    local distance = (basePosition - cameraPos).Magnitude
+    local bulletTravelTime = math.clamp(distance / config.bulletVelocity, 0.01, 3)
+    
+    -- === MOVEMENT PREDICTION ===
     if config.autoPrediction and targetVelocities[player] then
         local velocity = targetVelocities[player]
-        local distance = (targetPart.Position - Camera.CFrame.Position).Magnitude
-        local bulletTravelTime = math.clamp(distance / config.bulletVelocity, 0, 1)
-        local leadTime = math.max(config.prediction, bulletTravelTime * 0.5)
+        local velocityMagnitude = velocity.Magnitude
         
-        basePosition = basePosition + (velocity * leadTime)
+        if velocityMagnitude > 1 then
+            -- Use ping compensation as base lead time
+            local leadTime = bulletTravelTime * config.prediction + pingCompensation
+            
+            -- Speed multiplier for fast targets
+            local speedMultiplier = math.min(velocityMagnitude / 30, 2)
+            leadTime = leadTime * (1 + speedMultiplier * 0.3)
+            
+            basePosition = basePosition + (velocity * leadTime)
+        end
     end
     
+    -- === BULLET DROP COMPENSATION ===
     if config.bulletDrop > 0 then
-        local distance = (basePosition - Camera.CFrame.Position).Magnitude
-        local bulletTravelTime = math.clamp(distance / config.bulletVelocity, 0, 2)
-        local drop = 0.5 * config.bulletDrop * bulletTravelTime * bulletTravelTime
+        local predictedDistance = (basePosition - cameraPos).Magnitude
+        local travelTime = math.clamp(predictedDistance / config.bulletVelocity, 0.01, 3)
+        
+        -- Physics formula with ping compensation
+        local drop = 0.5 * config.bulletDrop * travelTime * travelTime
+        drop = drop * config.gravityCompensation
+        
+        -- Add slight adjustment for ping
+        drop = drop * (1 + pingCompensation * 0.5)
+        
         basePosition = basePosition + Vector3.new(0, drop, 0)
     end
     
@@ -273,6 +484,11 @@ local function onRenderStepped()
     updateFOVPosition()
     
     if not config.enabled then return end
+    
+    -- Auto-detect values periodically
+    if config.autoCalibration and tick() % 5 < 0.1 then
+        detectPing()
+    end
     
     local target, player = getClosestTarget()
     
@@ -508,10 +724,35 @@ PredictionTab:Toggle({
     end
 })
 
+PredictionTab:Toggle({
+    Title = "Auto Calibration",
+    Desc = "Automatically detect bullet velocity, drop, and ping",
+    Default = config.autoCalibration,
+    Callback = function(value)
+        config.autoCalibration = value
+        if value then
+            performAutoCalibration()
+        end
+    end
+})
+
+PredictionTab:Button({
+    Title = "Calibrate Now",
+    Desc = "Manually run auto-calibration",
+    Callback = function()
+        performAutoCalibration()
+        print("Calibration complete! Detected values:")
+        print("Ping: " .. math.floor(autoCalc.ping * 1000) .. "ms")
+        print("Bullet Velocity: " .. config.bulletVelocity .. " studs/s")
+        print("Bullet Drop: " .. config.bulletDrop .. " studs/s²")
+        print("Prediction: " .. config.prediction)
+    end
+})
+
 PredictionTab:Slider({
-    Title = "Prediction Time",
-    Desc = "Seconds to predict ahead",
-    Step = 0.01,
+    Title = "Prediction Multiplier",
+    Desc = "How much to lead moving targets (higher = more lead)",
+    Step = 0.05,
     Value = {
         Min = 0,
         Max = 1,
@@ -547,6 +788,20 @@ PredictionTab:Slider({
     },
     Callback = function(value) 
         config.bulletDrop = value 
+    end
+})
+
+PredictionTab:Slider({
+    Title = "Drop Compensation",
+    Desc = "Multiplier for bullet drop compensation",
+    Step = 0.05,
+    Value = {
+        Min = 0,
+        Max = 2,
+        Default = config.gravityCompensation
+    },
+    Callback = function(value) 
+        config.gravityCompensation = value 
     end
 })
 
@@ -612,12 +867,20 @@ SettingsTab:Keybind({
 -- ===== INITIAL SETUP =====
 updateToggleKeybind()
 
+-- Run auto-calibration on load
+task.wait(1) -- Wait for game to fully load
+performAutoCalibration()
+
 plr.CharacterAdded:Connect(function(character)
     character:WaitForChild("HumanoidRootPart", 5)
     lastTargetPos = {}
     targetVelocities = {}
     currentTarget = nil
     currentTargetPlayer = nil
+    -- Re-run calibration after character loads
+    if config.autoCalibration then
+        performAutoCalibration()
+    end
 end)
 
 print("Silent Aim script loaded successfully!")
