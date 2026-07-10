@@ -133,7 +133,7 @@ local autoCalc = {
 
 -- ===== CLEANUP FUNCTION =====
 local function cleanup()
-    print("Cleaning up Silent Aim script...")
+    print("Cleaning up VaM Client...")
     
     -- Cleanup ESP
     for player, data in pairs(espObjects) do
@@ -247,7 +247,7 @@ local function cleanup()
     config.hitboxEnabled = false
     config.espEnabled = false
     
-    print("Cleanup complete! Script fully unloaded.")
+    print("Cleanup complete! VaM Client fully unloaded.")
 end
 
 -- ===== CHANT CHANGER =====
@@ -835,7 +835,7 @@ local function updateFOVPosition()
     if centerDot then centerDot.Position = UDim2.new(0, mousePos.X, 0, mousePos.Y) end
 end
 
--- ===== ESP FUNCTIONS =====
+-- ===== ESP FUNCTIONS (FIXED - Stacked Billboard) =====
 local function isPlayerBehindWall(player)
     if not player or not player.Character then return false end
     
@@ -958,21 +958,24 @@ local function updateESP()
                         end
                     end
                     
-                    -- Name Label
+                    -- Name & Distance Labels (Stacked together in one BillboardGui)
                     if config.espNameEnabled then
                         local headPart = player.Character:FindFirstChild("Head") or targetPart
                         if headPart then
+                            -- Create a single BillboardGui for both name and distance
                             if not espData.nameLabel then
                                 local billboard = Instance.new("BillboardGui")
                                 billboard.Adornee = headPart
-                                billboard.Size = UDim2.new(0, 300, 0, 40)
+                                billboard.Size = UDim2.new(0, 300, 0, 60) -- Taller to fit both
                                 billboard.StudsOffset = Vector3.new(0, 3.5, 0)
                                 billboard.AlwaysOnTop = true
                                 billboard.MaxDistance = 0
                                 billboard.Parent = headPart
                                 
+                                -- Name label (top)
                                 local nameLabel = Instance.new("TextLabel")
-                                nameLabel.Size = UDim2.new(1, 0, 1, 0)
+                                nameLabel.Size = UDim2.new(1, 0, 0, 30)
+                                nameLabel.Position = UDim2.new(0, 0, 0, 0)
                                 nameLabel.BackgroundTransparency = 1
                                 nameLabel.TextColor3 = outlineColor
                                 nameLabel.Text = player.Name
@@ -982,56 +985,38 @@ local function updateESP()
                                 nameLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
                                 nameLabel.Parent = billboard
                                 
+                                -- Distance label (bottom, directly under name)
+                                local distLabel = Instance.new("TextLabel")
+                                distLabel.Size = UDim2.new(1, 0, 0, 25)
+                                distLabel.Position = UDim2.new(0, 0, 0, 32) -- Below name
+                                distLabel.BackgroundTransparency = 1
+                                distLabel.TextColor3 = outlineColor
+                                distLabel.TextSize = 16
+                                distLabel.Font = Enum.Font.SourceSans
+                                distLabel.TextStrokeTransparency = 0.3
+                                distLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+                                distLabel.Parent = billboard
+                                
                                 espData.nameLabel = billboard
                                 espData.nameText = nameLabel
+                                espData.distText = distLabel
                             else
+                                -- Update existing billboard
                                 espData.nameText.TextColor3 = outlineColor
+                                espData.nameText.Text = player.Name
+                                espData.distText.TextColor3 = outlineColor
                                 espData.nameLabel.Adornee = headPart
                                 espData.nameLabel.MaxDistance = 0
                             end
                             
-                            -- Distance Label
+                            -- Update distance if enabled
                             if config.espShowDistance then
-                                if not espData.distanceLabel then
-                                    local distBillboard = Instance.new("BillboardGui")
-                                    distBillboard.Adornee = headPart
-                                    distBillboard.Size = UDim2.new(0, 200, 0, 30)
-                                    distBillboard.StudsOffset = Vector3.new(0, 1.5, 0)
-                                    distBillboard.AlwaysOnTop = true
-                                    distBillboard.MaxDistance = 0
-                                    distBillboard.Parent = headPart
-                                    
-                                    local distLabel = Instance.new("TextLabel")
-                                    distLabel.Size = UDim2.new(1, 0, 1, 0)
-                                    distLabel.BackgroundTransparency = 1
-                                    distLabel.TextColor3 = outlineColor
-                                    distLabel.TextSize = 16
-                                    distLabel.Font = Enum.Font.SourceSans
-                                    distLabel.TextStrokeTransparency = 0.3
-                                    distLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
-                                    distLabel.Parent = distBillboard
-                                    
-                                    espData.distanceLabel = distBillboard
-                                    espData.distText = distLabel
-                                else
-                                    espData.distText.TextColor3 = outlineColor
-                                    espData.distanceLabel.Adornee = headPart
-                                    espData.distanceLabel.MaxDistance = 0
-                                end
-                                
                                 local distance = (headPart.Position - Camera.CFrame.Position).Magnitude
                                 local distanceText = string.format("%.0f studs", distance)
                                 espData.distText.Text = distanceText
+                                espData.distText.Visible = true
                             else
-                                if espData.distanceLabel then
-                                    pcall(function() espData.distanceLabel:Destroy() end)
-                                    espData.distanceLabel = nil
-                                    espData.distText = nil
-                                end
-                            end
-                            
-                            if espData.nameText then
-                                espData.nameText.Text = player.Name
+                                espData.distText.Visible = false
                             end
                         end
                     else
@@ -1039,10 +1024,6 @@ local function updateESP()
                             pcall(function() espData.nameLabel:Destroy() end)
                             espData.nameLabel = nil
                             espData.nameText = nil
-                        end
-                        if espData.distanceLabel then
-                            pcall(function() espData.distanceLabel:Destroy() end)
-                            espData.distanceLabel = nil
                             espData.distText = nil
                         end
                     end
@@ -1054,7 +1035,7 @@ end
 
 -- ===== CREATE UI =====
 local Window = Library:CreateWindow({
-    Title = "Silent Aim",
+    Title = "VaM Client",
     Center = true,
     AutoShow = true,
     Resizable = true,
@@ -1062,18 +1043,18 @@ local Window = Library:CreateWindow({
     ToggleKey = Enum.KeyCode[config.guiToggleKey] or Enum.KeyCode.RightShift,
 })
 
-local MainTab = Window:AddTab("Main")
+-- ===== CREATE TABS =====
+local SilentAimTab = Window:AddTab("Silent Aim")
 local PredictionTab = Window:AddTab("Prediction")
--- ESP Tab moved here (after Prediction, before Hitbox)
 local ESPTab = Window:AddTab("ESP")
 local HitboxTab = Window:AddTab("Hitbox")
 local ChantTab = Window:AddTab("Chant")
 local SettingsTab = Window:AddTab("Settings")
 
--- ===== MAIN TAB =====
-local MainGroup = MainTab:AddLeftGroupbox("Silent Aim")
+-- ===== SILENT AIM TAB (FORMERLY MAIN) =====
+local SilentAimGroup = SilentAimTab:AddLeftGroupbox("Silent Aim")
 
-MainGroup:AddToggle("Enabled", {
+SilentAimGroup:AddToggle("Enabled", {
     Text = "Enabled",
     Default = config.enabled,
     Callback = function(v)
@@ -1082,7 +1063,7 @@ MainGroup:AddToggle("Enabled", {
     end
 })
 
-MainGroup:AddSlider("FOVRadius", {
+SilentAimGroup:AddSlider("FOVRadius", {
     Text = "FOV Radius",
     Default = config.fovRadius,
     Min = 30,
@@ -1095,26 +1076,26 @@ MainGroup:AddSlider("FOVRadius", {
     end
 })
 
-MainGroup:AddToggle("TeamCheck", {
+SilentAimGroup:AddToggle("TeamCheck", {
     Text = "Team Check",
     Default = config.teamCheck,
     Callback = function(v) config.teamCheck = v end
 })
 
-MainGroup:AddDropdown("AimPart", {
+SilentAimGroup:AddDropdown("AimPart", {
     Text = "Aim Part",
     Values = {"Head", "Torso", "HumanoidRootPart"},
     Default = 1,
     Callback = function(v) config.aimPart = v end
 })
 
-MainGroup:AddToggle("WallCheck", {
+SilentAimGroup:AddToggle("WallCheck", {
     Text = "Wall Check",
     Default = config.wallCheck,
     Callback = function(v) config.wallCheck = v end
 })
 
-MainGroup:AddSlider("Smoothing", {
+SilentAimGroup:AddSlider("Smoothing", {
     Text = "Smoothing",
     Default = config.smoothing,
     Min = 0.05,
@@ -1217,7 +1198,7 @@ PredictionGroup:AddLabel("Velocity Deviation: ±60")
 PredictionGroup:AddLabel("Base Damage: 100 | Min: 80")
 PredictionGroup:AddLabel("Effective Range: 250-600 studs")
 
--- ===== ESP TAB (MOVED HERE) =====
+-- ===== ESP TAB =====
 local ESPGroup = ESPTab:AddLeftGroupbox("ESP Settings")
 
 ESPGroup:AddToggle("ESPEnabled", {
@@ -1634,7 +1615,7 @@ end)
 task.wait(0.5)
 initChantPackage()
 
-print("Silent Aim loaded successfully!")
+print("VaM Client loaded successfully!")
 print("Musket Settings Applied:")
 print("  Velocity: " .. WEAPON_SETTINGS.Velocity .. " studs/s")
 print("  Deviation: ±" .. WEAPON_SETTINGS.VelocityDeviation)
