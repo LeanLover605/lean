@@ -10,7 +10,7 @@ local esplib = loadstring(game:HttpGet("https://raw.githubusercontent.com/tulont
 getgenv().esplib = {
     box = {
         enabled = true,
-        type = "normal", -- normal, corner
+        type = "normal",
         padding = 1.15,
         fill = Color3.new(1, 1, 1),
         outline = Color3.new(0, 0, 0),
@@ -34,7 +34,7 @@ getgenv().esplib = {
         enabled = false,
         fill = Color3.new(1, 1, 1),
         outline = Color3.new(0, 0, 0),
-        from = "bottom", -- mouse, head, top, bottom, center
+        from = "bottom",
     },
 }
 
@@ -83,6 +83,7 @@ local config = {
     showFOV = true,
     fovColor = Color3.fromRGB(255, 255, 255),
     fovTransparency = 0.7,
+    fovThickness = 1,
     toggleKey = "Delete",
     guiToggleKey = "RightShift",
     smoothing = 0.3,
@@ -135,6 +136,10 @@ local playerHitboxes = {}
 local originalFireServer = nil
 local isUILoaded = false
 
+-- ===== ESP STATE =====
+local espObjects = {}
+local espEnabledPlayers = {}
+
 -- ===== CONNECTIONS (FOR CLEANUP) =====
 local connections = {
     renderStepped = nil,
@@ -142,6 +147,7 @@ local connections = {
     characterAdded = nil,
     hitboxUpdate = nil,
     toggleKeybind = nil,
+    espUpdate = nil,
 }
 
 -- ===== AUTO-CALCULATION =====
@@ -165,15 +171,58 @@ local autoCalc = {
     remoteName = nil,
 }
 
+-- ===== FOV CIRCLE (DRAWING API) =====
+local function createFOVCircle()
+    if fovCircle then
+        pcall(function() fovCircle:Remove() end)
+        fovCircle = nil
+    end
+    
+    if not Drawing then
+        warn("Drawing API not available! FOV circle disabled.")
+        return
+    end
+    
+    fovCircle = Drawing.new("Circle")
+    fovCircle.Visible = config.showFOV and config.enabled
+    fovCircle.Thickness = config.fovThickness or 1
+    fovCircle.Color = config.fovColor
+    fovCircle.Transparency = config.fovTransparency or 0.7
+    fovCircle.Filled = false
+    fovCircle.NumSides = 60
+    fovCircle.Radius = config.fovRadius
+end
+
+local function updateFOVCircle()
+    if not fovCircle then return end
+    fovCircle.Visible = config.showFOV and config.enabled
+    fovCircle.Radius = config.fovRadius
+    fovCircle.Color = config.fovColor
+    fovCircle.Transparency = config.fovTransparency
+    fovCircle.Thickness = config.fovThickness or 1
+end
+
+local function updateFOVPosition()
+    if not fovCircle or not fovCircle.Visible then return end
+    local mousePos = UserInputService:GetMouseLocation()
+    fovCircle.Position = Vector2.new(mousePos.X, mousePos.Y)
+end
+
 -- ===== CLEANUP FUNCTION =====
 local function cleanup()
     print("Cleaning up VaM Client...")
     
-    -- Cleanup ESP (the library handles its own cleanup)
-    -- We just need to clear our references
-    for player, _ in pairs(espObjects) do
-        espObjects[player] = nil
+    -- Cleanup FOV Circle
+    if fovCircle then
+        pcall(function() fovCircle:Remove() end)
+        fovCircle = nil
     end
+    
+    -- Cleanup ESP
+    for player, _ in pairs(espEnabledPlayers) do
+        espEnabledPlayers[player] = nil
+    end
+    espObjects = {}
     
     if originalFireServer and hitRemote then
         pcall(function()
@@ -224,6 +273,13 @@ local function cleanup()
         connections.hitboxUpdate = nil
     end
     
+    if connections.espUpdate then
+        pcall(function()
+            connections.espUpdate:Disconnect()
+        end)
+        connections.espUpdate = nil
+    end
+    
     for _, data in pairs(playerHitboxes) do
         if data.hitbox then
             pcall(function()
@@ -237,13 +293,6 @@ local function cleanup()
         end
     end
     playerHitboxes = {}
-    
-    if fovCircle then
-        pcall(function()
-            fovCircle:Destroy()
-        end)
-        fovCircle = nil
-    end
     
     -- Use the native unload function
     if Window then
@@ -784,6 +833,8 @@ end
 
 -- ===== SILENT AIM =====
 local function onRenderStepped()
+    updateFOVPosition()
+    
     if not config.enabled then return end
     if config.autoCalibration and tick() % 5 < 0.1 then detectPing() end
     
@@ -806,55 +857,8 @@ local function onRenderStepped()
     end
 end
 
--- ===== FOV CIRCLE =====
-local function createFOVCircle()
-    if fovCircle then pcall(function() fovCircle:Destroy() end) end
-    fovCircle = Instance.new("ScreenGui")
-    fovCircle.Name = "FOVCircle"
-    fovCircle.Parent = game:GetService("CoreGui")
-    fovCircle.Enabled = config.showFOV and config.enabled
-    fovCircle.ResetOnSpawn = false
-    
-    local outline = Instance.new("ImageLabel")
-    outline.Name = "CircleOutline"
-    outline.Size = UDim2.new(0, config.fovRadius * 2, 0, config.fovRadius * 2)
-    outline.AnchorPoint = Vector2.new(0.5, 0.5)
-    outline.BackgroundTransparency = 1
-    outline.BorderSizePixel = 0
-    outline.Image = "rbxassetid://10891594364"
-    outline.ImageColor3 = config.fovColor
-    outline.ImageTransparency = config.fovTransparency
-    outline.ScaleType = Enum.ScaleType.Fit
-    outline.Parent = fovCircle
-    
-    local centerDot = Instance.new("ImageLabel")
-    centerDot.Name = "CenterDot"
-    centerDot.Size = UDim2.new(0, 4, 0, 4)
-    centerDot.AnchorPoint = Vector2.new(0.5, 0.5)
-    centerDot.BackgroundTransparency = 1
-    centerDot.BorderSizePixel = 0
-    centerDot.Image = "rbxassetid://10891594364"
-    centerDot.ImageColor3 = config.fovColor
-    centerDot.ImageTransparency = 0
-    centerDot.ScaleType = Enum.ScaleType.Fit
-    centerDot.Parent = fovCircle
-end
-
-local function updateFOVPosition()
-    if not fovCircle or not fovCircle.Enabled then return end
-    local mousePos = UserInputService:GetMouseLocation()
-    local outline = fovCircle:FindFirstChild("CircleOutline")
-    local centerDot = fovCircle:FindFirstChild("CenterDot")
-    if outline then outline.Position = UDim2.new(0, mousePos.X, 0, mousePos.Y) end
-    if centerDot then centerDot.Position = UDim2.new(0, mousePos.X, 0, mousePos.Y) end
-end
-
 -- ===== ESP FUNCTIONS (Using esp-lib.lua) =====
-local espObjects = {}
-local espEnabledPlayers = {}
-
 local function updateESPColors()
-    -- Update global esp-lib settings
     local espSettings = getgenv().esplib
     if not espSettings then return end
     
@@ -869,7 +873,6 @@ local function setupESPForPlayer(player)
     if player == plr then return end
     if espEnabledPlayers[player] then return end
     
-    -- Check if player is alive and valid
     local function shouldShowESP()
         if not player or not player.Character then return false end
         if config.espTeamCheck and player.Team == plr.Team then return false end
@@ -883,7 +886,6 @@ local function setupESPForPlayer(player)
     local character = player.Character
     if not character then return end
     
-    -- Add ESP elements using the library
     if config.espBoxEnabled then
         esplib.add_box(character)
     end
@@ -902,16 +904,13 @@ local function setupESPForPlayer(player)
     
     espEnabledPlayers[player] = true
     
-    -- Set up character added for respawn
     if not espObjects[player] then
         espObjects[player] = {}
     end
     
     if not espObjects[player].connection then
         espObjects[player].connection = player.CharacterAdded:Connect(function(newCharacter)
-            -- Wait for character to load
             task.wait(0.5)
-            -- Re-add ESP to new character
             if shouldShowESP() then
                 if config.espBoxEnabled then
                     esplib.add_box(newCharacter)
@@ -937,8 +936,6 @@ local function removeESPForPlayer(player)
     if not espEnabledPlayers[player] then return end
     espEnabledPlayers[player] = nil
     
-    -- The esp-lib handles cleanup automatically when instances are removed
-    -- We just need to clear our reference
     if espObjects[player] then
         if espObjects[player].connection then
             pcall(function()
@@ -950,7 +947,6 @@ local function removeESPForPlayer(player)
 end
 
 local function updateAllESP()
-    -- Remove ESP for players that no longer exist or are dead
     for player, _ in pairs(espEnabledPlayers) do
         if not player or not player.Parent or player == plr then
             removeESPForPlayer(player)
@@ -974,7 +970,6 @@ local function updateAllESP()
         end
     end
     
-    -- Add ESP for eligible players
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= plr and player.Character and player.Character.Parent then
             if config.espTeamCheck and player.Team == plr.Team then
@@ -1024,7 +1019,7 @@ SilentAimGroup:AddToggle("Enabled", {
     Default = config.enabled,
     Callback = function(v)
         config.enabled = v
-        if fovCircle then fovCircle.Enabled = config.showFOV and v end
+        if fovCircle then fovCircle.Visible = config.showFOV and v end
     end
 })
 
@@ -1036,8 +1031,7 @@ SilentAimGroup:AddSlider("FOVRadius", {
     Rounding = 0,
     Callback = function(v)
         config.fovRadius = v
-        local outline = fovCircle and fovCircle:FindFirstChild("CircleOutline")
-        if outline then outline.Size = UDim2.new(0, v * 2, 0, v * 2) end
+        updateFOVCircle()
     end
 })
 
@@ -1176,7 +1170,6 @@ ESPGroup:AddToggle("ESPEnabled", {
         if v then
             updateAllESP()
         else
-            -- Clear all ESP
             for player, _ in pairs(espEnabledPlayers) do
                 removeESPForPlayer(player)
             end
@@ -1465,7 +1458,7 @@ toggleKeyLabel:AddKeyPicker("ToggleKey", {
                 if Toggles and Toggles.Enabled then
                     Toggles.Enabled:SetValue(config.enabled)
                 end
-                if fovCircle then fovCircle.Enabled = config.showFOV and config.enabled end
+                if fovCircle then fovCircle.Visible = config.showFOV and config.enabled end
             end
         end)
     end
@@ -1530,7 +1523,7 @@ connections.toggleKeybind = UserInputService.InputBegan:Connect(function(input, 
         if Toggles and Toggles.Enabled then
             Toggles.Enabled:SetValue(config.enabled)
         end
-        if fovCircle then fovCircle.Enabled = config.showFOV and config.enabled end
+        if fovCircle then fovCircle.Visible = config.showFOV and config.enabled end
     end
 end)
 
@@ -1543,7 +1536,7 @@ if config.hitboxEnabled then
     hookHitRemote()
 end
 
--- Start ESP update loop (using RenderStepped for faster updates)
+-- Start ESP update loop
 connections.espUpdate = RunService.RenderStepped:Connect(function()
     if config.espEnabled then
         pcall(updateAllESP)
@@ -1594,7 +1587,6 @@ end)
 
 connections.renderStepped = RunService.RenderStepped:Connect(function()
     pcall(onRenderStepped)
-    pcall(updateFOVPosition)
 end)
 
 connections.velocityLoop = task.spawn(function()
