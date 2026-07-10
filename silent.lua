@@ -61,13 +61,13 @@ local config = {
 }
 
 -- ===== STATE =====
-local guiElements = {}
 local toggleKeyConnection = nil
 local fovCircle = nil
 local lastTargetPos = {}
 local targetVelocities = {}
 local currentTarget = nil
 local currentTargetPlayer = nil
+local enabledToggleElement = nil -- Store reference to toggle element
 
 -- ===== CREATE FOV CIRCLE =====
 local function createFOVCircle()
@@ -325,8 +325,12 @@ end)
 local function setEnabled(value)
     config.enabled = value
     
-    if guiElements.enabledToggle then
-        guiElements.enabledToggle:Set(value)
+    -- Update the toggle element without calling its Set method
+    if enabledToggleElement then
+        -- Use pcall to handle any internal errors
+        pcall(function()
+            enabledToggleElement:Set(value)
+        end)
     end
     
     if fovCircle then
@@ -349,7 +353,24 @@ local function updateToggleKeybind()
     toggleKeyConnection = UserInputService.InputBegan:Connect(function(input, gameProcessed)
         if gameProcessed then return end
         if input.KeyCode == Enum.KeyCode[config.toggleKey] then
-            setEnabled(not config.enabled)
+            -- Toggle the config value directly
+            config.enabled = not config.enabled
+            
+            -- Update UI elements without creating loops
+            if enabledToggleElement then
+                pcall(function()
+                    enabledToggleElement:Set(config.enabled)
+                end)
+            end
+            
+            if fovCircle then
+                fovCircle.Enabled = config.showFOV and config.enabled
+            end
+            
+            if not config.enabled then
+                currentTarget = nil
+                currentTargetPlayer = nil
+            end
         end
     end)
 end
@@ -357,12 +378,31 @@ end
 -- ===== CREATE GUI =====
 local Window = WindUI:CreateWindow({
     Title = "Silent Aim",
+    Icon = "lucide:crosshair", -- lucide icon
     Author = "by Prayut",
-    Icon = "crosshair",
-    Theme = "Dark",
+    Folder = "SilentAim",
+    
+    -- Window settings
+    Size = UDim2.fromOffset(600, 500),
+    MinSize = Vector2.new(560, 350),
+    MaxSize = Vector2.new(850, 560),
     ToggleKey = Enum.KeyCode.RightShift,
+    Transparent = true,
+    Theme = "Dark",
     Resizable = true,
-    Size = UDim2.new(0, 600, 0, 500)
+    SideBarWidth = 200,
+    BackgroundImageTransparency = 0.42,
+    HideSearchBar = true,
+    ScrollBarEnabled = false,
+    
+    -- User profile (non-anonymous)
+    User = {
+        Enabled = true,
+        Anonymous = false,
+        Callback = function()
+            print("User profile clicked")
+        end,
+    },
 })
 
 local MainTab = Window:Tab({
@@ -391,10 +431,22 @@ local enabledToggle = MainTab:Toggle({
     Desc = "Toggle silent aim on/off",
     Default = config.enabled,
     Callback = function(value) 
-        setEnabled(value) 
+        -- Only update if the value actually changed
+        if config.enabled ~= value then
+            config.enabled = value
+            
+            if fovCircle then
+                fovCircle.Enabled = config.showFOV and value
+            end
+            
+            if not value then
+                currentTarget = nil
+                currentTargetPlayer = nil
+            end
+        end
     end
 })
-guiElements.enabledToggle = enabledToggle
+enabledToggleElement = enabledToggle
 
 MainTab:Slider({
     Title = "FOV Radius",
