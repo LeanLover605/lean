@@ -29,7 +29,7 @@ local WEAPON_SETTINGS = {
     SwayFactor = 0.08,
 }
 
--- ===== CHANT PACKAGE LIST (FIXED: ScottishRSG not ScottishRSC) =====
+-- ===== CHANT PACKAGE LIST =====
 local chantPackages = {
     "American", "Danish", "Dutch", "English", "English1FG", "EnglishGuard",
     "French", "FrenchGuard", "FrenchGuard2", "GermanBrunswick", "GermanKaiser",
@@ -80,7 +80,7 @@ local playerHitboxes = {}
 local originalFireServer = nil
 local isUILoaded = false
 
--- ===== CONNECTIONS =====
+-- ===== CONNECTIONS (FOR CLEANUP) =====
 local connections = {
     renderStepped = nil,
     velocityLoop = nil,
@@ -110,18 +110,117 @@ local autoCalc = {
     remoteName = nil,
 }
 
--- ===== CHANT CHANGER (FIXED: Uses ObjectValue) =====
+-- ===== CLEANUP FUNCTION =====
+local function cleanup()
+    print("Cleaning up Silent Aim script...")
+    
+    -- Restore original Hit remote FireServer
+    if originalFireServer and hitRemote then
+        pcall(function()
+            hitRemote.FireServer = originalFireServer
+        end)
+        originalFireServer = nil
+    end
+    
+    -- Disconnect remote connection
+    if remoteConnection then
+        pcall(function()
+            remoteConnection:Disconnect()
+        end)
+        remoteConnection = nil
+    end
+    
+    -- Disconnect toggle keybind
+    if connections.toggleKeybind then
+        pcall(function()
+            connections.toggleKeybind:Disconnect()
+        end)
+        connections.toggleKeybind = nil
+    end
+    
+    -- Disconnect render stepped
+    if connections.renderStepped then
+        pcall(function()
+            connections.renderStepped:Disconnect()
+        end)
+        connections.renderStepped = nil
+    end
+    
+    -- Disconnect velocity loop
+    if connections.velocityLoop then
+        pcall(function()
+            connections.velocityLoop:Disconnect()
+        end)
+        connections.velocityLoop = nil
+    end
+    
+    -- Disconnect character added
+    if connections.characterAdded then
+        pcall(function()
+            connections.characterAdded:Disconnect()
+        end)
+        connections.characterAdded = nil
+    end
+    
+    -- Disconnect hitbox update loop
+    if connections.hitboxUpdate then
+        pcall(function()
+            connections.hitboxUpdate:Disconnect()
+        end)
+        connections.hitboxUpdate = nil
+    end
+    
+    -- Destroy all hitboxes
+    for _, data in pairs(playerHitboxes) do
+        if data.hitbox then
+            pcall(function()
+                data.hitbox:Destroy()
+            end)
+        end
+        if data.connection then
+            pcall(function()
+                data.connection:Disconnect()
+            end)
+        end
+    end
+    playerHitboxes = {}
+    
+    -- Destroy FOV circle
+    if fovCircle then
+        pcall(function()
+            fovCircle:Destroy()
+        end)
+        fovCircle = nil
+    end
+    
+    -- Unload the UI
+    if Window then
+        pcall(function()
+            Library:Unload()
+        end)
+        Window = nil
+    end
+    
+    -- Clear all state
+    lastTargetPos = {}
+    targetVelocities = {}
+    fastCastHooked = false
+    config.enabled = false
+    config.hitboxEnabled = false
+    
+    print("Cleanup complete! Script fully unloaded.")
+end
+
+-- ===== CHANT CHANGER (Uses ObjectValue) =====
 local function setChantPackage(packageName)
     if not plr or not packageName then return end
     
-    -- Get the ChantPackage ObjectValue
     local chantValue = plr:FindFirstChild("ChantPackage")
     if not chantValue and plr.Character then
         chantValue = plr.Character:FindFirstChild("ChantPackage")
     end
     
     if chantValue then
-        -- Find the chant object in ReplicatedStorage.Chants
         local chantsFolder = ReplicatedStorage:FindFirstChild("Chants")
         if chantsFolder then
             local chantObject = chantsFolder:FindFirstChild(packageName)
@@ -138,7 +237,6 @@ local function setChantPackage(packageName)
             warn("Chants folder not found in ReplicatedStorage")
         end
     else
-        -- Create the ObjectValue if it doesn't exist
         local chantsFolder = ReplicatedStorage:FindFirstChild("Chants")
         if chantsFolder then
             local chantObject = chantsFolder:FindFirstChild(packageName)
@@ -164,7 +262,6 @@ local function initChantPackage()
     end
     
     if chantValue and chantValue.Value then
-        -- Get the name from the ObjectValue
         local chantName = chantValue.Value.Name
         if chantName then
             config.chantPackage = chantName
@@ -574,37 +671,6 @@ local function updateFOVPosition()
     if centerDot then centerDot.Position = UDim2.new(0, mousePos.X, 0, mousePos.Y) end
 end
 
--- ===== CLEANUP =====
-local function cleanup()
-    print("Cleaning up...")
-    if originalFireServer and hitRemote then
-        pcall(function() hitRemote.FireServer = originalFireServer end)
-        originalFireServer = nil
-    end
-    if remoteConnection then pcall(function() remoteConnection:Disconnect() end) remoteConnection = nil end
-    if connections.toggleKeybind then pcall(function() connections.toggleKeybind:Disconnect() end) end
-    if connections.renderStepped then pcall(function() connections.renderStepped:Disconnect() end) end
-    if connections.velocityLoop then pcall(function() connections.velocityLoop:Disconnect() end) end
-    if connections.characterAdded then pcall(function() connections.characterAdded:Disconnect() end) end
-    if connections.hitboxUpdate then pcall(function() connections.hitboxUpdate:Disconnect() end) end
-    
-    for _, data in pairs(playerHitboxes) do
-        if data.hitbox then pcall(function() data.hitbox:Destroy() end) end
-        if data.connection then pcall(function() data.connection:Disconnect() end) end
-    end
-    playerHitboxes = {}
-    
-    if fovCircle then pcall(function() fovCircle:Destroy() end) fovCircle = nil end
-    if Window then pcall(function() Library:Unload() end) end
-    
-    lastTargetPos = {}
-    targetVelocities = {}
-    fastCastHooked = false
-    config.enabled = false
-    config.hitboxEnabled = false
-    print("Cleanup complete!")
-end
-
 -- ===== CREATE UI =====
 local Window = Library:CreateWindow({
     Title = "Silent Aim",
@@ -996,3 +1062,4 @@ print("  Damage: " .. WEAPON_SETTINGS.BaseDamage .. "-" .. WEAPON_SETTINGS.MinDa
 print("  Range: " .. WEAPON_SETTINGS.BaseDmgDistance .. "-" .. WEAPON_SETTINGS.MinDmgDistance .. " studs")
 print("Press " .. config.toggleKey .. " to toggle")
 print("Press RightShift to toggle menu")
+print("Click 'Unload Script' in the Settings tab to fully unload")
