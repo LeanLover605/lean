@@ -106,6 +106,42 @@ local config = {
     hitboxTransparency = 0.5,
     hitboxTeamCheck = false,
     hitboxPart = "Head",
+    
+    -- Chant Changer settings
+    chantPackage = "English", -- Default chant package
+}
+
+-- ===== CHANT PACKAGE LIST =====
+local chantPackages = {
+    "American",
+    "Danish",
+    "Dutch",
+    "English",
+    "English1FG",
+    "EnglishGuard",
+    "French",
+    "FrenchGuard",
+    "FrenchGuard2",
+    "GermanBrunswick",
+    "GermanKaiser",
+    "GermanKing",
+    "Irish",
+    "Italian",
+    "ItalianGuard",
+    "Ottoman",
+    "Polish",
+    "Polish2",
+    "PolishCongress",
+    "Romanian",
+    "Russian",
+    "Scottish",
+    "Scottish42nd",
+    "Scottish71st",
+    "ScottishRSC",
+    "Spanish",
+    "Swedish",
+    "Swiss",
+    "Zulu"
 }
 
 -- ===== AUTO-CALCULATION SYSTEM =====
@@ -182,6 +218,45 @@ local shouldExtendHitbox
 local fireHitRemote
 local hookFastCastRedux
 local hookHitRemote
+local setChantPackage
+
+-- ===== CHANT CHANGER FUNCTIONS =====
+function setChantPackage(packageName)
+    if not plr then return end
+    
+    -- Find the ChantPackage value in the player
+    local chantValue = plr:FindFirstChild("ChantPackage")
+    if not chantValue then
+        -- Try to find it in the player's character
+        if plr.Character then
+            chantValue = plr.Character:FindFirstChild("ChantPackage")
+        end
+    end
+    
+    if chantValue then
+        pcall(function()
+            chantValue.Value = packageName
+            config.chantPackage = packageName
+            print("Chant package changed to: " .. packageName)
+        end)
+    else
+        warn("ChantPackage not found! Creating one...")
+        -- Try to create it if it doesn't exist
+        local newChantValue = Instance.new("StringValue")
+        newChantValue.Name = "ChantPackage"
+        newChantValue.Value = packageName
+        
+        -- Parent it to the player or their character
+        if plr.Character then
+            newChantValue.Parent = plr.Character
+        else
+            newChantValue.Parent = plr
+        end
+        
+        config.chantPackage = packageName
+        print("Created and set Chant package to: " .. packageName)
+    end
+end
 
 -- ===== GET TARGET PART =====
 function getTargetPart(player)
@@ -1358,6 +1433,11 @@ local HitboxTab = Window:Tab({
     Icon = "expand"
 })
 
+local ChantTab = Window:Tab({
+    Title = "Chant Changer",
+    Icon = "music"
+})
+
 local CalibrationTab = Window:Tab({
     Title = "Calibration",
     Icon = "sliders"
@@ -1681,6 +1761,52 @@ HitboxTab:Paragraph({
     Desc = "FastCastRedux uses raycasts with velocity-based hit detection. The Hit remote expects velocity as the second argument, which matches FastCastRedux's RayHit event."
 })
 
+-- ===== CHANT CHANGER TAB =====
+ChantTab:Paragraph({
+    Title = "Chant Changer",
+    Desc = "Change your character's chant package to any available nationality or regiment."
+})
+
+ChantTab:Dropdown({
+    Title = "Chant Package",
+    Desc = "Select a chant package to apply to your character",
+    Values = chantPackages,
+    Default = config.chantPackage,
+    Callback = function(value)
+        setChantPackage(value)
+    end
+})
+
+ChantTab:Button({
+    Title = "Refresh Chant",
+    Desc = "Re-apply the current chant package",
+    Callback = function()
+        setChantPackage(config.chantPackage)
+        print("Refreshed chant package: " .. config.chantPackage)
+    end
+})
+
+ChantTab:Button({
+    Title = "Random Chant",
+    Desc = "Apply a random chant package",
+    Callback = function()
+        local randomIndex = math.random(1, #chantPackages)
+        local randomChant = chantPackages[randomIndex]
+        setChantPackage(randomChant)
+        print("Applied random chant package: " .. randomChant)
+    end
+})
+
+ChantTab:Paragraph({
+    Title = "Current Chant",
+    Desc = "Current chant package: " .. (config.chantPackage or "Not set")
+})
+
+ChantTab:Paragraph({
+    Title = "Available Packages",
+    Desc = #chantPackages .. " chant packages available"
+})
+
 -- ===== CALIBRATION TAB =====
 CalibrationTab:Toggle({
     Title = "Auto Calibration",
@@ -1857,6 +1983,25 @@ print("UI fully loaded!")
 -- ===== INITIAL SETUP =====
 updateToggleKeybind()
 
+-- Initialize chant package on load
+task.wait(1)
+local chantValue = plr:FindFirstChild("ChantPackage")
+if chantValue then
+    config.chantPackage = chantValue.Value
+    print("Current chant package: " .. config.chantPackage)
+else
+    -- Try to find it in the character
+    if plr.Character then
+        chantValue = plr.Character:FindFirstChild("ChantPackage")
+        if chantValue then
+            config.chantPackage = chantValue.Value
+            print("Current chant package (from character): " .. config.chantPackage)
+        else
+            print("No ChantPackage found. Use the Chant Changer to set one.")
+        end
+    end
+end
+
 task.wait(1)
 local remoteFound = setupHitRemoteListener()
 
@@ -1890,6 +2035,20 @@ connections.characterAdded = plr.CharacterAdded:Connect(function(character)
     if config.autoCalibration then
         performAutoCalibration()
     end
+    
+    -- Check for ChantPackage after character respawn
+    task.wait(0.5)
+    local chantValue = character:FindFirstChild("ChantPackage")
+    if chantValue then
+        config.chantPackage = chantValue.Value
+        print("Chant package after respawn: " .. config.chantPackage)
+        -- Update UI if loaded
+        if isUILoaded and guiElements.chantPackageDropdown then
+            pcall(function()
+                guiElements.chantPackageDropdown:Set(config.chantPackage)
+            end)
+        end
+    end
 end)
 
 Players.PlayerAdded:Connect(function(player)
@@ -1914,3 +2073,4 @@ print("Click 'Unload Script' in the Calibration tab to fully unload")
 print("Hitbox Extender: " .. (config.hitboxEnabled and "ENABLED" or "DISABLED"))
 print("FastCastRedux Hook: " .. (fastCastHooked and "ACTIVE" or "INACTIVE"))
 print("FastCastRedux uses raycasts with velocity-based hit detection!")
+print("Current Chant Package: " .. (config.chantPackage or "Not set"))
