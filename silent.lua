@@ -111,60 +111,39 @@ local isUILoaded = false
 -- ===== UI SLIDER REFERENCE STORAGE =====
 local sliderElements = {}
 
--- ===== ON HIT DETECTED =====
-local function onHitDetected(...)
-    -- Track the hit
-    autoCalc.totalShots = autoCalc.totalShots + 1
-    autoCalc.totalHits = autoCalc.totalHits + 1
-    autoCalc.hitRate = autoCalc.totalHits / autoCalc.totalShots
-    
-    print("HIT DETECTED! Hit rate: " .. math.floor(autoCalc.hitRate * 100) .. "% (" .. autoCalc.totalHits .. "/" .. autoCalc.totalShots .. ")")
-    
-    -- Only update UI if it's loaded and the element exists
-    if isUILoaded and guiElements and guiElements.hitRateText then
-        pcall(function()
-            guiElements.hitRateText:SetDesc("Current hit rate: " .. math.floor(autoCalc.hitRate * 100) .. "% (" .. autoCalc.totalHits .. "/" .. autoCalc.totalShots .. ")")
-        end)
-    end
-    
-    if config.adaptiveCalibration and autoCalc.totalShots >= 5 then
-        performAdaptiveCalibration()
-    end
-end
+-- ===== FORWARD DECLARATIONS =====
+-- These functions are declared before they're used
+local performAdaptiveCalibration
+local updateUISliders
 
 -- ===== UPDATE UI SLIDERS =====
-local function updateUISliders()
+updateUISliders = function()
     if not isUILoaded then return end
     
-    -- Update Prediction slider
     if sliderElements.predictionSlider then
         pcall(function()
             sliderElements.predictionSlider:Set(config.prediction)
         end)
     end
     
-    -- Update Bullet Velocity slider
     if sliderElements.velocitySlider then
         pcall(function()
             sliderElements.velocitySlider:Set(config.bulletVelocity)
         end)
     end
     
-    -- Update Bullet Drop slider
     if sliderElements.dropSlider then
         pcall(function()
             sliderElements.dropSlider:Set(config.bulletDrop)
         end)
     end
     
-    -- Update Drop Compensation slider
     if sliderElements.compensationSlider then
         pcall(function()
             sliderElements.compensationSlider:Set(config.gravityCompensation)
         end)
     end
     
-    -- Update Calibration Target text
     if guiElements.calibrationTargetText then
         pcall(function()
             guiElements.calibrationTargetText:SetDesc("Currently calibrating: " .. autoCalc.calibrationTarget)
@@ -173,7 +152,7 @@ local function updateUISliders()
 end
 
 -- ===== ADAPTIVE CALIBRATION =====
-local function performAdaptiveCalibration(force)
+performAdaptiveCalibration = function(force)
     if not config.adaptiveCalibration and not force then return end
     
     local hitRate = autoCalc.hitRate
@@ -227,8 +206,28 @@ local function performAdaptiveCalibration(force)
         print("Adaptive calibration: " .. autoCalc.calibrationTarget .. " -> " .. string.format("%.3f", newValue))
         print("Current hit rate: " .. math.floor(hitRate * 100) .. "%")
         
-        -- Update UI sliders with new values
         updateUISliders()
+    end
+end
+
+-- ===== ON HIT DETECTED =====
+local function onHitDetected(...)
+    -- Track the hit
+    autoCalc.totalShots = autoCalc.totalShots + 1
+    autoCalc.totalHits = autoCalc.totalHits + 1
+    autoCalc.hitRate = autoCalc.totalHits / autoCalc.totalShots
+    
+    print("HIT DETECTED! Hit rate: " .. math.floor(autoCalc.hitRate * 100) .. "% (" .. autoCalc.totalHits .. "/" .. autoCalc.totalShots .. ")")
+    
+    -- Only update UI if it's loaded and the element exists
+    if isUILoaded and guiElements and guiElements.hitRateText then
+        pcall(function()
+            guiElements.hitRateText:SetDesc("Current hit rate: " .. math.floor(autoCalc.hitRate * 100) .. "% (" .. autoCalc.totalHits .. "/" .. autoCalc.totalShots .. ")")
+        end)
+    end
+    
+    if config.adaptiveCalibration and autoCalc.totalShots >= 5 then
+        performAdaptiveCalibration()
     end
 end
 
@@ -301,7 +300,6 @@ local function trackShotAttempt()
         autoCalc.totalShots = autoCalc.totalShots + 1
         autoCalc.lastShotTime = currentTime
         
-        -- Only update UI if it's loaded
         if isUILoaded and guiElements and guiElements.hitRateText then
             pcall(function()
                 guiElements.hitRateText:SetDesc("Current hit rate: " .. math.floor(autoCalc.hitRate * 100) .. "% (" .. autoCalc.totalHits .. "/" .. autoCalc.totalShots .. ")")
@@ -433,7 +431,6 @@ local function performAutoCalibration()
         print("Auto-adjusted prediction to: " .. config.prediction)
     end
     
-    -- Update all UI sliders with new values
     updateUISliders()
 end
 
@@ -665,7 +662,6 @@ local function onRenderStepped()
         detectPing()
     end
     
-    -- Track mouse clicks for shot attempts
     if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
         trackShotAttempt()
     end
@@ -1142,12 +1138,10 @@ print("UI fully loaded!")
 -- ===== INITIAL SETUP =====
 updateToggleKeybind()
 
--- Setup hit remote listener with specific path
 task.wait(1)
 local remoteFound = setupHitRemoteListener()
 
 if not remoteFound then
-    -- Keep trying to find the remote
     task.spawn(function()
         while true do
             task.wait(10)
@@ -1158,7 +1152,6 @@ if not remoteFound then
     end)
 end
 
--- Run initial calibration AFTER UI is fully loaded
 task.wait(1)
 performAutoCalibration()
 
