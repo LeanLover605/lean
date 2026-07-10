@@ -115,6 +115,8 @@ local hitRemote = nil
 local remoteConnection = nil
 local remoteSearching = false
 local isUILoaded = false
+local fastCast = nil
+local fastCastHooked = false
 
 -- ===== UI SLIDER REFERENCE STORAGE =====
 local sliderElements = {}
@@ -125,10 +127,13 @@ local connections = {
     velocityLoop = nil,
     characterAdded = nil,
     hitboxUpdate = nil,
+    fastCastHook = nil,
 }
 
 -- ===== HITBOX EXTENDER STATE =====
 local playerHitboxes = {}
+local originalHitRemote = nil
+local originalFireServer = nil
 
 -- ===== FORWARD DECLARATIONS =====
 local performAdaptiveCalibration
@@ -140,6 +145,8 @@ local updateAllHitboxes
 local getTargetPart
 local shouldExtendHitbox
 local fireHitRemote
+local hookFastCastRedux
+local hookHitRemote
 
 -- ===== GET TARGET PART =====
 function getTargetPart(player)
@@ -165,8 +172,31 @@ function shouldExtendHitbox(player)
     return true
 end
 
+-- ===== GET PLAYER FROM PART =====
+local function getPlayerFromPart(part)
+    if not part then return nil end
+    
+    -- Check if part is a hitbox
+    for player, data in pairs(playerHitboxes) do
+        if data.hitbox == part then
+            return player
+        end
+    end
+    
+    -- Check if part is in a character
+    local character = part.Parent
+    while character do
+        if character:IsA("Model") and character:FindFirstChildOfClass("Humanoid") then
+            return Players:GetPlayerFromCharacter(character)
+        end
+        character = character.Parent
+    end
+    
+    return nil
+end
+
 -- ===== FIRE HIT REMOTE =====
-function fireHitRemote(targetPlayer, hitPosition)
+function fireHitRemote(targetPlayer, hitVelocity)
     if not hitRemote then
         setupHitRemoteListener()
         if not hitRemote then return end
@@ -177,24 +207,179 @@ function fireHitRemote(targetPlayer, hitPosition)
     local humanoid = targetPlayer.Character:FindFirstChildOfClass("Humanoid")
     if not humanoid then return end
     
-    local hitPos = hitPosition
-    if not hitPos then
-        local targetPart = getTargetPart(targetPlayer)
-        if targetPart then
-            hitPos = targetPart.Position
-        else
-            hitPos = targetPlayer.Character.PrimaryPart and targetPlayer.Character.PrimaryPart.Position or targetPlayer.Character.Position
+    pcall(function()
+        hitRemote:FireServer(
+            plr,           -- [1] Shooter
+            hitVelocity,   -- [2] Vector3 velocity at impact
+            humanoid       -- [3] Target's Humanoid
+        )
+        print("Fired Hit remote for: " .. targetPlayer.Name .. " with velocity: " .. tostring(hitVelocity))
+    end)
+end
+
+-- ===== HOOK FASTCASTREDUX =====
+function hookFastCastRedux()
+    if fastCastHooked then return true end
+    
+    print("Attempting to hook FastCastRedux...")
+    
+    -- Get the FastCastRedux module
+    local fastCastModule = ReplicatedStorage:FindFirstChild("Tools")
+    if fastCastModule then
+        local components = fastCastModule:FindFirstChild("Components")
+        if components then
+            local muzzle = components:FindFirstChild("Muzzle")
+            if muzzle then
+                fastCast = muzzle:FindFirstChild("FastCastRedux")
+                if fastCast then
+                    print("Found FastCastRedux module!")
+                    
+                    -- Try to get the actual FastCast instance
+                    local fastCastInstance = nil
+                    
+                    -- Method 1: Check if it's already initialized
+                    if fastCast.__index and fastCast.__index.RayHit then
+                        fastCastInstance = fastCast
+                    end
+                    
+                    -- Method 2: Check for a global FastCast instance
+                    if not fastCastInstance and _G.FastCast then
+                        fastCastInstance = _G.FastCast
+                    end
+                    
+                    -- Method 3: Search workspace for FastCast objects
+                    if not fastCastInstance then
+                        for _, obj in ipairs(Workspace:GetDescendants()) do
+                            if obj:IsA("ModuleScript") and obj.Name == "FastCastRedux" then
+                                local success, result = pcall(function()
+                                    return require(obj)
+                                end)
+                                if success and result and result.RayHit then
+                                    fastCastInstance = result
+                                    break
+                                end
+                            end
+                        end
+                    end
+                    
+                    if fastCastInstance and fastCastInstance.RayHit then
+                        print("Hooking FastCastRedux RayHit event...")
+                        
+                        -- Hook the RayHit event
+                        local oldRayHit = fastCastInstance.RayHit
+                        fastCastInstance.RayHit = function(cast, result, velocity, cosmeticBullet)
+                            -- Check if the hit part is our extended hitbox
+                            local hitPart = result and result.Instance
+                            local hitPlayer = getPlayerFromPart(hitPart)
+                            
+                            if hitPlayer and playerHitboxes[hitPlayer] then
+                                print("FastCast hit extended hitbox: " .. hitPlayer.Name)
+                                
+                                -- Get the real target part
+                                local realTargetPart = playerHitboxes[hitPlayer].targetPart
+                                if realTargetPart then
+                                    -- Fire the Hit remote with the velocity
+                                    fireHitRemote(hitPlayer, velocity)
+                                end
+                            end
+                            
+                            -- Call the original event
+                            if oldRayHit then
+                                return oldRayHit(cast, result, velocity, cosmeticBullet)
+                            end
+                        end
+                        
+                        fastCastHooked = true
+                        print("FastCastRedux hooked successfully!")
+                        return true
+                    else
+                        print("Could not find FastCastRedux instance. Trying alternative method...")
+                        
+                        -- Alternative: Hook the module's new function
+                        local success, result = pcall(function()
+                            return require(fastCast)
+                        end)
+                        
+                        if success and result and result.new then
+                            local oldNew = result.new
+                            result.new = function(...)
+                                local instance = oldNew(...)
+                                
+                                -- Hook the instance's events
+                                if instance and instance.RayHit then
+                                    local oldInstanceRayHit = instance.RayHit
+                                    instance.RayHit = function(cast, result, velocity, cosmeticBullet)
+                                        local hitPart = result and result.Instance
+                                        local hitPlayer = getPlayerFromPart(hitPart)
+                                        
+                                        if hitPlayer and playerHitboxes[hitPlayer] then
+                                            print("FastCast instance hit extended hitbox: " .. hitPlayer.Name)
+                                            fireHitRemote(hitPlayer, velocity)
+                                        end
+                                        
+                                        if oldInstanceRayHit then
+                                            return oldInstanceRayHit(cast, result, velocity, cosmeticBullet)
+                                        end
+                                    end
+                                end
+                                
+                                return instance
+                            end
+                            
+                            fastCastHooked = true
+                            print("FastCastRedux new() hooked successfully!")
+                            return true
+                        end
+                    end
+                else
+                    print("FastCastRedux not found at expected location.")
+                end
+            end
         end
     end
     
-    pcall(function()
-        hitRemote:FireServer(
-            plr,
-            hitPos,
-            humanoid
-        )
-        print("Fired Hit remote for: " .. targetPlayer.Name .. " at position: " .. tostring(hitPos))
-    end)
+    print("Failed to hook FastCastRedux.")
+    return false
+end
+
+-- ===== HOOK HIT REMOTE =====
+function hookHitRemote()
+    if originalHitRemote then return true end
+    
+    print("Hooking Hit remote...")
+    
+    if not hitRemote then
+        setupHitRemoteListener()
+        if not hitRemote then return false end
+    end
+    
+    -- Store original FireServer
+    originalFireServer = hitRemote.FireServer
+    
+    -- Hook the FireServer method
+    hitRemote.FireServer = function(self, ...)
+        local args = {...}
+        local shooter = args[1]
+        local velocity = args[2]
+        local targetHumanoid = args[3]
+        
+        -- Check if this is a hit on our extended hitbox
+        local targetPlayer = targetHumanoid and targetHumanoid.Parent and Players:GetPlayerFromCharacter(targetHumanoid.Parent)
+        
+        if targetPlayer and playerHitboxes[targetPlayer] then
+            print("Hit remote detected hit on extended hitbox: " .. targetPlayer.Name)
+            -- Let the original remote fire normally
+        end
+        
+        -- Call original
+        if originalFireServer then
+            return originalFireServer(self, ...)
+        end
+    end
+    
+    originalHitRemote = true
+    print("Hit remote hooked successfully!")
+    return true
 end
 
 -- ===== CREATE HITBOX FOR PLAYER =====
@@ -209,13 +394,14 @@ function createHitboxForPlayer(player)
     local hitbox = Instance.new("Part")
     hitbox.Name = "ExtendedHitbox"
     hitbox.Anchored = false
-    hitbox.CanCollide = false
+    hitbox.CanCollide = true
     hitbox.Massless = true
     hitbox.Transparency = config.hitboxTransparency or 0.5
     hitbox.Color = config.hitboxColor or Color3.fromRGB(255, 0, 0)
     hitbox.Material = Enum.Material.Neon
     hitbox.Size = targetPart.Size * config.hitboxSize
     
+    -- Weld to target part
     local weld = Instance.new("Weld")
     weld.Part0 = targetPart
     weld.Part1 = hitbox
@@ -231,16 +417,30 @@ function createHitboxForPlayer(player)
         connection = nil
     }
     
+    -- Touch detection (for visual feedback only, since raycasts don't trigger Touched)
     playerHitboxes[player].connection = hitbox.Touched:Connect(function(hit)
         if hit and hit.Parent then
-            local isBullet = hit.Name:match("Bullet") or hit.Name:match("Projectile") or hit.Name:match("Ray") or hit:IsA("Part")
-            
+            -- Check if a physical bullet hit (unlikely with FastCastRedux)
+            local isBullet = hit.Name:match("Bullet") or hit.Name:match("Projectile")
             if isBullet then
-                local hitPos = hit.Position
-                fireHitRemote(player, hitPos)
+                print("Physical bullet touched extended hitbox: " .. player.Name)
+                -- Try to get velocity from bullet
+                local velocity = Vector3.new(0, 0, 0)
+                local velProp = hit:FindFirstChild("Velocity")
+                if velProp then
+                    if type(velProp.Value) == "Vector3" then
+                        velocity = velProp.Value
+                    elseif type(velProp.Value) == "number" then
+                        local dir = (hit.Position - hit.Parent.Position).Unit
+                        velocity = dir * velProp.Value
+                    end
+                end
+                fireHitRemote(player, velocity)
             end
         end
     end)
+    
+    print("Created hitbox for: " .. player.Name)
 end
 
 -- ===== REMOVE HITBOX FOR PLAYER =====
@@ -257,6 +457,7 @@ function removeHitboxForPlayer(player)
             end)
         end
         playerHitboxes[player] = nil
+        print("Removed hitbox for: " .. player.Name)
     end
 end
 
@@ -284,6 +485,15 @@ end
 -- ===== CLEANUP FUNCTION =====
 cleanup = function()
     print("Cleaning up Silent Aim script...")
+    
+    -- Restore original Hit remote
+    if originalFireServer and hitRemote then
+        pcall(function()
+            hitRemote.FireServer = originalFireServer
+        end)
+        originalFireServer = nil
+        originalHitRemote = nil
+    end
     
     if remoteConnection then
         pcall(function()
@@ -327,6 +537,13 @@ cleanup = function()
         connections.hitboxUpdate = nil
     end
     
+    if connections.fastCastHook then
+        pcall(function()
+            connections.fastCastHook:Disconnect()
+        end)
+        connections.fastCastHook = nil
+    end
+    
     for player, data in pairs(playerHitboxes) do
         if data.hitbox then
             pcall(function()
@@ -363,6 +580,8 @@ cleanup = function()
     currentTargetPlayer = nil
     enabledToggleElement = nil
     hitRemote = nil
+    fastCast = nil
+    fastCastHooked = false
     isUILoaded = false
     
     config.enabled = false
@@ -1261,6 +1480,9 @@ local hitboxEnabled = HitboxTab:Toggle({
         config.hitboxEnabled = value
         if value then
             updateAllHitboxes()
+            -- Hook FastCastRedux when enabling
+            hookFastCastRedux()
+            hookHitRemote()
         else
             for player, _ in pairs(playerHitboxes) do
                 pcall(function() removeHitboxForPlayer(player) end)
@@ -1368,16 +1590,36 @@ HitboxTab:Button({
                 removeHitboxForPlayer(player)
             end
             updateAllHitboxes()
-            print("Hitboxes refreshed!")
+            hookFastCastRedux()
+            hookHitRemote()
+            print("Hitboxes refreshed and hooks re-established!")
         else
             print("Hitbox extender is disabled. Enable it first.")
         end
     end
 })
 
+HitboxTab:Button({
+    Title = "Force Hook FastCast",
+    Desc = "Manually hook FastCastRedux if it wasn't detected",
+    Callback = function()
+        local success = hookFastCastRedux()
+        if success then
+            print("FastCastRedux hooked successfully!")
+        else
+            print("Failed to hook FastCastRedux. Check console for details.")
+        end
+    end
+})
+
+HitboxTab:Paragraph({
+    Title = "FastCast Status",
+    Desc = fastCastHooked and "FastCastRedux is hooked!" or "FastCastRedux not hooked yet."
+})
+
 HitboxTab:Paragraph({
     Title = "Hitbox Info",
-    Desc = "Hitboxes are created on enemy players and follow their movement. When shot, they register as hits on the actual player."
+    Desc = "Hitboxes are created on enemy players. With FastCastRedux hooks, shots that hit the extended hitbox will register as hits on the actual player."
 })
 
 -- ===== CALIBRATION TAB =====
@@ -1573,6 +1815,13 @@ end
 task.wait(1)
 performAutoCalibration()
 
+-- Hook FastCastRedux if hitbox extender is enabled
+if config.hitboxEnabled then
+    task.wait(0.5)
+    hookFastCastRedux()
+    hookHitRemote()
+end
+
 connections.characterAdded = plr.CharacterAdded:Connect(function(character)
     character:WaitForChild("HumanoidRootPart", 5)
     lastTargetPos = {}
@@ -1603,3 +1852,5 @@ print("Silent Aim script loaded successfully!")
 print("Press Delete to toggle silent aim on/off")
 print("Press RightShift to toggle GUI")
 print("Click 'Unload Script' in the Calibration tab to fully unload")
+print("Hitbox Extender: " .. (config.hitboxEnabled and "ENABLED" or "DISABLED"))
+print("FastCastRedux Hook: " .. (fastCastHooked and "ACTIVE" or "INACTIVE"))
