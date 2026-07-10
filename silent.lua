@@ -88,18 +88,21 @@ local autoCalc = {
         gravityCompensation = { min = 0.5, max = 1.5, current = config.gravityCompensation }
     },
     
-    -- Remote detection
     remoteFound = false,
     remoteType = nil,
     remotePath = nil,
     remoteName = nil,
 }
 
--- ===== INTERCEPT HIT REMOTE (SPECIFIC PATH) =====
+-- ===== INTERCEPT HIT REMOTE =====
 local hitRemote = nil
 local remoteConnection = nil
+local remoteSearching = false
 
 local function setupHitRemoteListener()
+    if remoteSearching then return false end
+    remoteSearching = true
+    
     print("Looking for Hit remote at: ReplicatedStorage.Tools.Components.Muzzle.Hit")
     
     -- Try the specific path first
@@ -119,10 +122,14 @@ local function setupHitRemoteListener()
                     
                     -- Setup listener based on remote type
                     if hitRemote:IsA("RemoteEvent") then
+                        if remoteConnection then
+                            remoteConnection:Disconnect()
+                        end
                         remoteConnection = hitRemote.OnClientEvent:Connect(function(...)
                             onHitDetected(...)
                         end)
                         print("Connected to Hit RemoteEvent!")
+                        remoteSearching = false
                         return true
                     elseif hitRemote:IsA("RemoteFunction") then
                         local oldInvoke = hitRemote.OnClientInvoke
@@ -133,78 +140,24 @@ local function setupHitRemoteListener()
                             end
                         end
                         print("Connected to Hit RemoteFunction!")
+                        remoteSearching = false
                         return true
                     end
                 else
-                    print("Hit remote not found in Muzzle. Searching all remotes...")
+                    print("Hit remote not found in Muzzle.")
                 end
             else
-                print("Muzzle folder not found. Searching all remotes...")
+                print("Muzzle folder not found.")
             end
         else
-            print("Components folder not found. Searching all remotes...")
+            print("Components folder not found.")
         end
     else
-        print("Tools folder not found. Searching all remotes...")
+        print("Tools folder not found.")
     end
     
-    -- Fallback: Search for any remote named "Hit"
-    print("Searching for any remote named 'Hit'...")
-    local function searchForHit(instance)
-        if instance:IsA("RemoteEvent") or instance:IsA("RemoteFunction") then
-            if instance.Name == "Hit" then
-                return instance
-            end
-        end
-        
-        for _, child in ipairs(instance:GetChildren()) do
-            local result = searchForHit(child)
-            if result then
-                return result
-            end
-        end
-        return nil
-    end
-    
-    hitRemote = searchForHit(ReplicatedStorage)
-    if hitRemote then
-        print("Found Hit remote at: " .. getPath(hitRemote))
-        autoCalc.remoteFound = true
-        autoCalc.remoteName = hitRemote.Name
-        autoCalc.remotePath = getPath(hitRemote)
-        autoCalc.remoteType = hitRemote:IsA("RemoteEvent") and "RemoteEvent" or "RemoteFunction"
-        
-        if hitRemote:IsA("RemoteEvent") then
-            remoteConnection = hitRemote.OnClientEvent:Connect(function(...)
-                onHitDetected(...)
-            end)
-            print("Connected to Hit RemoteEvent!")
-            return true
-        elseif hitRemote:IsA("RemoteFunction") then
-            local oldInvoke = hitRemote.OnClientInvoke
-            hitRemote.OnClientInvoke = function(...)
-                onHitDetected(...)
-                if oldInvoke then
-                    return oldInvoke(...)
-                end
-            end
-            print("Connected to Hit RemoteFunction!")
-            return true
-        end
-    end
-    
-    print("Could not find Hit remote. Will keep searching...")
+    remoteSearching = false
     return false
-end
-
-local function getPath(instance)
-    local path = {instance.Name}
-    local parent = instance.Parent
-    while parent and parent ~= game do
-        table.insert(path, 1, parent.Name)
-        parent = parent.Parent
-    end
-    return table.concat(path, ".")
 end
 
 -- ===== ON HIT DETECTED =====
@@ -217,8 +170,10 @@ local function onHitDetected(...)
     print("HIT DETECTED! Hit rate: " .. math.floor(autoCalc.hitRate * 100) .. "% (" .. autoCalc.totalHits .. "/" .. autoCalc.totalShots .. ")")
     
     -- Update UI if it exists
-    if guiElements.hitRateText then
-        guiElements.hitRateText:SetDesc("Current hit rate: " .. math.floor(autoCalc.hitRate * 100) .. "% (" .. autoCalc.totalHits .. "/" .. autoCalc.totalShots .. ")")
+    if guiElements and guiElements.hitRateText then
+        pcall(function()
+            guiElements.hitRateText:SetDesc("Current hit rate: " .. math.floor(autoCalc.hitRate * 100) .. "% (" .. autoCalc.totalHits .. "/" .. autoCalc.totalShots .. ")")
+        end)
     end
     
     if config.adaptiveCalibration and autoCalc.totalShots >= 5 then
@@ -234,8 +189,10 @@ local function trackShotAttempt()
         autoCalc.lastShotTime = currentTime
         
         -- Update UI
-        if guiElements.hitRateText then
-            guiElements.hitRateText:SetDesc("Current hit rate: " .. math.floor(autoCalc.hitRate * 100) .. "% (" .. autoCalc.totalHits .. "/" .. autoCalc.totalShots .. ")")
+        if guiElements and guiElements.hitRateText then
+            pcall(function()
+                guiElements.hitRateText:SetDesc("Current hit rate: " .. math.floor(autoCalc.hitRate * 100) .. "% (" .. autoCalc.totalHits .. "/" .. autoCalc.totalShots .. ")")
+            end)
         end
         
         if autoCalc.totalShots - autoCalc.totalHits > 10 then
@@ -300,8 +257,10 @@ local function performAdaptiveCalibration(force)
         print("Current hit rate: " .. math.floor(hitRate * 100) .. "%")
         
         -- Update UI
-        if guiElements.calibrationTargetText then
-            guiElements.calibrationTargetText:SetDesc("Currently calibrating: " .. autoCalc.calibrationTarget)
+        if guiElements and guiElements.calibrationTargetText then
+            pcall(function()
+                guiElements.calibrationTargetText:SetDesc("Currently calibrating: " .. autoCalc.calibrationTarget)
+            end)
         end
     end
 end
@@ -1012,7 +971,9 @@ CalibrationTab:Button({
         autoCalc.hitRate = 0
         print("Statistics reset!")
         if guiElements.hitRateText then
-            guiElements.hitRateText:SetDesc("Current hit rate: 0% (0/0)")
+            pcall(function()
+                guiElements.hitRateText:SetDesc("Current hit rate: 0% (0/0)")
+            end)
         end
     end
 })
@@ -1041,14 +1002,16 @@ CalibrationTab:Button({
     Desc = "Manually search for the Hit remote",
     Callback = function()
         print("Manual remote search...")
-        setupHitRemoteListener()
-        if autoCalc.remoteFound then
+        local found = setupHitRemoteListener()
+        if found then
             print("Found remote: " .. autoCalc.remoteName)
             if guiElements.remoteStatusText then
-                guiElements.remoteStatusText:SetDesc("Remote found: " .. autoCalc.remoteName .. " at " .. (autoCalc.remotePath or "unknown path"))
+                pcall(function()
+                    guiElements.remoteStatusText:SetDesc("Remote found: " .. autoCalc.remoteName .. " at " .. (autoCalc.remotePath or "unknown path"))
+                end)
             end
         else
-            print("No remote found. Check console for search results.")
+            print("No remote found.")
         end
     end
 })
