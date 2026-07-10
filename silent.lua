@@ -123,7 +123,7 @@ local autoCalc = {
     calibrationTarget = "prediction",
     calibrationValues = {
         prediction = { min = 0.05, max = 0.5, current = config.prediction },
-        bulletDrop = { min = 0, max = 30, current = config.bulletDrop },
+        bulletDrop = { min = 0, max = 70, current = config.bulletDrop },
         bulletVelocity = { min = 100, max = 2000, current = config.bulletVelocity },
         gravityCompensation = { min = 0.5, max = 3.0, current = config.gravityCompensation }
     },
@@ -645,7 +645,7 @@ local function updateTargetVelocities()
     end
 end
 
--- ===== PREDICT POSITION =====
+-- ===== PREDICT POSITION (WITH FASTCASTREDUX ACCELERATION) =====
 local function predictPosition(targetPart, player)
     if not targetPart or not targetPart.Parent then
         return targetPart and targetPart.Position or Vector3.new(0, 0, 0)
@@ -657,8 +657,13 @@ local function predictPosition(targetPart, player)
     local bulletVelocity = config.bulletVelocity or WEAPON_SETTINGS.Velocity
     local pingComp = autoCalc.ping or 0.05
     
+    -- FastCastRedux uses this formula for position with acceleration:
+    -- position = origin + velocity * time + 0.5 * acceleration * time^2
+    -- So bullet drop = 0.5 * gravity * time^2 (where gravity is the Y component of Acceleration)
+    
     local bulletTravelTime = math.clamp(distance / bulletVelocity, 0.01, 5)
     
+    -- ===== MOVEMENT PREDICTION =====
     if config.autoPrediction and targetVelocities[player] then
         local velocity = targetVelocities[player]
         if velocity and velocity.Magnitude > 1 then
@@ -684,25 +689,37 @@ local function predictPosition(targetPart, player)
         end
     end
     
+    -- ===== BULLET DROP COMPENSATION (FASTCASTREDUX FORMULA) =====
+    -- FastCastRedux uses: drop = 0.5 * acceleration * time^2
+    -- The bulletDrop value represents the gravitational acceleration (positive value for downward gravity)
     if config.bulletDrop > 0 then
         local predDist = (basePosition - cameraPos).Magnitude
         local travelTime = math.clamp(predDist / bulletVelocity, 0.01, 5)
         
+        -- Calculate drop using FastCastRedux formula: d = 0.5 * g * t^2
+        -- Since gravity pulls down, we add to Y to compensate (aim higher)
         local drop = 0.5 * config.bulletDrop * travelTime * travelTime
+        
+        -- Apply gravity compensation multiplier (fine-tuning)
         drop = drop * config.gravityCompensation
         
+        -- Extra compensation for long range
         if predDist > 300 then
             local longRangeMultiplier = 1 + (predDist - 300) / 500
             drop = drop * math.min(longRangeMultiplier, 3)
         end
         
+        -- Account for elevation difference (shooting uphill/downhill)
         local heightDiff = basePosition.Y - cameraPos.Y
         if heightDiff > 0 then
-            drop = drop * (1 + heightDiff / 50)
+            -- Target is above us, need more compensation
+            drop = drop * (1 + math.min(heightDiff / 50, 2))
         elseif heightDiff < -20 then
-            drop = drop * (1 + heightDiff / 100)
+            -- Target is below us (shooting downhill), less compensation
+            drop = drop * (1 + math.max(heightDiff / 100, -0.5))
         end
         
+        -- Apply drop compensation (aim higher than target)
         basePosition = basePosition + Vector3.new(0, drop, 0)
     end
     
@@ -1143,9 +1160,10 @@ PredictionGroup:AddSlider("BulletVelocity", {
 
 PredictionGroup:AddSlider("BulletDrop", {
     Text = "Bullet Drop (Gravity)",
+    Desc = "Gravitational acceleration in studs/s². Higher = more drop compensation.",
     Default = config.bulletDrop,
     Min = 0,
-    Max = 50,
+    Max = 70,
     Rounding = 0,
     Callback = function(v)
         config.bulletDrop = v
@@ -1198,7 +1216,8 @@ PredictionGroup:AddToggle("DebugMode", {
 
 PredictionGroup:AddLabel("Weapon Info")
 PredictionGroup:AddLabel("Musket Velocity: 1300 studs/s")
-PredictionGroup:AddLabel("Velocity Deviation: ±60")
+PredictionGroup:AddLabel("Velocity Deviation: ±60 (speed variation)")
+PredictionGroup:AddLabel("Deviation: 1.7 (accuracy/spread)")
 PredictionGroup:AddLabel("Base Damage: 100 | Min: 80")
 PredictionGroup:AddLabel("Effective Range: 250-600 studs")
 
@@ -1616,7 +1635,8 @@ initChantPackage()
 print("VaM Client loaded successfully!")
 print("Musket Settings Applied:")
 print("  Velocity: " .. WEAPON_SETTINGS.Velocity .. " studs/s")
-print("  Deviation: ±" .. WEAPON_SETTINGS.VelocityDeviation)
+print("  Velocity Deviation: ±" .. WEAPON_SETTINGS.VelocityDeviation .. " (speed variation)")
+print("  Deviation: " .. WEAPON_SETTINGS.Deviation .. " (accuracy/spread)")
 print("  Damage: " .. WEAPON_SETTINGS.BaseDamage .. "-" .. WEAPON_SETTINGS.MinDamage)
 print("  Range: " .. WEAPON_SETTINGS.BaseDmgDistance .. "-" .. WEAPON_SETTINGS.MinDmgDistance .. " studs")
 print("Press " .. config.toggleKey .. " to toggle silent aim")
