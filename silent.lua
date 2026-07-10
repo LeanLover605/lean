@@ -92,7 +92,6 @@ local config = {
     bulletVelocity = WEAPON_SETTINGS.Velocity,
     bulletDrop = 5,
     autoPrediction = true,
-    autoBulletDrop = true, -- NEW: Auto bullet drop calculation
     gravityCompensation = 1.5,
     longRangeCompensation = 1.5,
     mountedLeadMultiplier = 2.0,
@@ -213,11 +212,13 @@ end
 local function cleanup()
     print("Cleaning up VaM Client...")
     
+    -- Cleanup FOV Circle
     if fovCircle then
         pcall(function() fovCircle:Remove() end)
         fovCircle = nil
     end
     
+    -- Cleanup ESP
     for player, _ in pairs(espEnabledPlayers) do
         espEnabledPlayers[player] = nil
     end
@@ -293,6 +294,7 @@ local function cleanup()
     end
     playerHitboxes = {}
     
+    -- Use the native unload function
     if Window then
         pcall(function()
             Library:Unload()
@@ -300,6 +302,7 @@ local function cleanup()
         Window = nil
     end
     
+    -- Clear all state variables
     lastTargetPos = {}
     targetVelocities = {}
     fastCastHooked = false
@@ -711,7 +714,7 @@ local function updateTargetVelocities()
     end
 end
 
--- ===== PREDICT POSITION (WITH AUTO BULLET DROP) =====
+-- ===== PREDICT POSITION =====
 local function predictPosition(targetPart, player)
     if not targetPart or not targetPart.Parent then
         return targetPart and targetPart.Position or Vector3.new(0, 0, 0)
@@ -725,7 +728,6 @@ local function predictPosition(targetPart, player)
     
     local bulletTravelTime = math.clamp(distance / bulletVelocity, 0.01, 5)
     
-    -- ===== MOVEMENT PREDICTION =====
     if config.autoPrediction and targetVelocities[player] then
         local velocity = targetVelocities[player]
         if velocity and velocity.Magnitude > 1 then
@@ -751,45 +753,27 @@ local function predictPosition(targetPart, player)
         end
     end
     
-    -- ===== BULLET DROP COMPENSATION =====
-    local drop = 0
     if config.bulletDrop > 0 then
         local predDist = (basePosition - cameraPos).Magnitude
         local travelTime = math.clamp(predDist / bulletVelocity, 0.01, 5)
         
-        -- Calculate drop using physics formula: d = 0.5 * g * t^2
-        drop = 0.5 * config.bulletDrop * travelTime * travelTime
-        
-        -- Apply gravity compensation multiplier
+        local drop = 0.5 * config.bulletDrop * travelTime * travelTime
         drop = drop * config.gravityCompensation
         
-        -- Auto bullet drop calculation
-        if config.autoBulletDrop then
-            -- Use the actual distance to calculate the required compensation
-            -- The bullet drop value is gravitational acceleration
-            local actualDrop = 0.5 * config.bulletDrop * (distance / bulletVelocity)^2
-            
-            -- Adjust drop to compensate for the actual drop
-            -- If the predicted position is lower than the target, aim higher
-            local heightDiff = basePosition.Y - cameraPos.Y
-            if heightDiff > 0 then
-                -- Target is above us, need more compensation
-                drop = drop * (1 + math.min(heightDiff / 50, 2))
-            elseif heightDiff < -20 then
-                -- Target is below us, less compensation
-                drop = drop * (1 + math.max(heightDiff / 100, -0.5))
-            end
-            
-            -- Long range compensation
-            if predDist > 300 then
-                local longRangeMultiplier = 1 + (predDist - 300) / 500
-                drop = drop * math.min(longRangeMultiplier, 3)
-            end
+        if predDist > 300 then
+            local longRangeMultiplier = 1 + (predDist - 300) / 500
+            drop = drop * math.min(longRangeMultiplier, 3)
         end
+        
+        local heightDiff = basePosition.Y - cameraPos.Y
+        if heightDiff > 0 then
+            drop = drop * (1 + math.min(heightDiff / 50, 2))
+        elseif heightDiff < -20 then
+            drop = drop * (1 + math.max(heightDiff / 100, -0.5))
+        end
+        
+        basePosition = basePosition + Vector3.new(0, drop, 0)
     end
-    
-    -- Apply drop compensation (aim higher than target)
-    basePosition = basePosition + Vector3.new(0, drop, 0)
     
     return basePosition
 end
@@ -912,6 +896,7 @@ local function setupESPForPlayer(player)
     local character = player.Character
     if not character then return end
     
+    -- Update global esp-lib settings before adding
     updateESPColors()
     
     if config.espBoxEnabled then
@@ -976,8 +961,10 @@ local function removeESPForPlayer(player)
 end
 
 local function updateAllESP()
+    -- First update the global esp-lib settings
     updateESPColors()
     
+    -- Remove ESP for players that no longer exist or are dead
     for player, _ in pairs(espEnabledPlayers) do
         if not player or not player.Parent or player == plr then
             removeESPForPlayer(player)
@@ -1001,6 +988,7 @@ local function updateAllESP()
         end
     end
     
+    -- Add ESP for eligible players
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= plr and player.Character and player.Character.Parent then
             if config.espTeamCheck and player.Team == plr.Team then
@@ -1101,16 +1089,6 @@ PredictionGroup:AddToggle("AutoPrediction", {
     Text = "Auto Prediction",
     Default = config.autoPrediction,
     Callback = function(v) config.autoPrediction = v end
-})
-
-PredictionGroup:AddToggle("AutoBulletDrop", {
-    Text = "Auto Bullet Drop",
-    Desc = "Automatically calculate bullet drop compensation based on distance, velocity, and gravity",
-    Default = config.autoBulletDrop,
-    Callback = function(v)
-        config.autoBulletDrop = v
-        print("Auto bullet drop: " .. (v and "ON" or "OFF"))
-    end
 })
 
 PredictionGroup:AddSlider("PredictionMultiplier", {
@@ -1240,6 +1218,7 @@ ESPGroup:AddToggle("ESPBoxEnabled", {
         config.espBoxEnabled = v
         getgenv().esplib.box.enabled = v
         if config.espEnabled then
+            -- Refresh ESP for all players
             for player, _ in pairs(espEnabledPlayers) do
                 removeESPForPlayer(player)
             end
@@ -1597,12 +1576,14 @@ if config.hitboxEnabled then
     hookHitRemote()
 end
 
+-- Start ESP update loop
 connections.espUpdate = RunService.RenderStepped:Connect(function()
     if config.espEnabled then
         pcall(updateAllESP)
     end
 end)
 
+-- Handle new players joining
 Players.PlayerAdded:Connect(function(player)
     if config.espEnabled then
         task.wait(0.5)
@@ -1616,6 +1597,7 @@ Players.PlayerAdded:Connect(function(player)
     end
 end)
 
+-- Handle players leaving
 Players.PlayerRemoving:Connect(function(player)
     if playerHitboxes[player] then
         removeHitboxForPlayer(player)
@@ -1625,6 +1607,7 @@ Players.PlayerRemoving:Connect(function(player)
     end
 end)
 
+-- Also listen for our own character respawn
 connections.characterAdded = plr.CharacterAdded:Connect(function(character)
     character:WaitForChild("HumanoidRootPart", 5)
     lastTargetPos = {}
