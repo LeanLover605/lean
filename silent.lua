@@ -106,6 +106,7 @@ local guiElements = {}
 local hitRemote = nil
 local remoteConnection = nil
 local remoteSearching = false
+local isUILoaded = false -- Flag to track if UI is ready
 
 -- ===== ON HIT DETECTED =====
 local function onHitDetected(...)
@@ -116,8 +117,8 @@ local function onHitDetected(...)
     
     print("HIT DETECTED! Hit rate: " .. math.floor(autoCalc.hitRate * 100) .. "% (" .. autoCalc.totalHits .. "/" .. autoCalc.totalShots .. ")")
     
-    -- Update UI if it exists
-    if guiElements and guiElements.hitRateText then
+    -- Only update UI if it's loaded and the element exists
+    if isUILoaded and guiElements and guiElements.hitRateText then
         pcall(function()
             guiElements.hitRateText:SetDesc("Current hit rate: " .. math.floor(autoCalc.hitRate * 100) .. "% (" .. autoCalc.totalHits .. "/" .. autoCalc.totalShots .. ")")
         end)
@@ -183,8 +184,8 @@ local function performAdaptiveCalibration(force)
         print("Adaptive calibration: " .. autoCalc.calibrationTarget .. " -> " .. string.format("%.3f", newValue))
         print("Current hit rate: " .. math.floor(hitRate * 100) .. "%")
         
-        -- Update UI
-        if guiElements and guiElements.calibrationTargetText then
+        -- Only update UI if it's loaded and the element exists
+        if isUILoaded and guiElements and guiElements.calibrationTargetText then
             pcall(function()
                 guiElements.calibrationTargetText:SetDesc("Currently calibrating: " .. autoCalc.calibrationTarget)
             end)
@@ -261,8 +262,8 @@ local function trackShotAttempt()
         autoCalc.totalShots = autoCalc.totalShots + 1
         autoCalc.lastShotTime = currentTime
         
-        -- Update UI
-        if guiElements and guiElements.hitRateText then
+        -- Only update UI if it's loaded
+        if isUILoaded and guiElements and guiElements.hitRateText then
             pcall(function()
                 guiElements.hitRateText:SetDesc("Current hit rate: " .. math.floor(autoCalc.hitRate * 100) .. "% (" .. autoCalc.totalHits .. "/" .. autoCalc.totalShots .. ")")
             end)
@@ -969,7 +970,7 @@ CalibrationTab:Button({
         autoCalc.totalHits = 0
         autoCalc.hitRate = 0
         print("Statistics reset!")
-        if guiElements.hitRateText then
+        if isUILoaded and guiElements.hitRateText then
             pcall(function()
                 guiElements.hitRateText:SetDesc("Current hit rate: 0% (0/0)")
             end)
@@ -1004,7 +1005,7 @@ CalibrationTab:Button({
         local found = setupHitRemoteListener()
         if found then
             print("Found remote: " .. autoCalc.remoteName)
-            if guiElements.remoteStatusText then
+            if isUILoaded and guiElements.remoteStatusText then
                 pcall(function()
                     guiElements.remoteStatusText:SetDesc("Remote found: " .. autoCalc.remoteName .. " at " .. (autoCalc.remotePath or "unknown path"))
                 end)
@@ -1088,6 +1089,10 @@ SettingsTab:Slider({
     end
 })
 
+-- ===== UI IS NOW FULLY LOADED =====
+isUILoaded = true
+print("UI fully loaded!")
+
 -- ===== INITIAL SETUP =====
 updateToggleKeybind()
 
@@ -1107,7 +1112,7 @@ if not remoteFound then
     end)
 end
 
--- Run initial calibration AFTER UI is created
+-- Run initial calibration AFTER UI is fully loaded
 task.wait(1)
 performAutoCalibration()
 
