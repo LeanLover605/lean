@@ -1,4 +1,4 @@
--- ===== LINORIA LIBRARY LOADING =====
+-- ===== LINORIA LIBRARY LOADING (zic1 fork) =====
 local Library = loadstring(game:HttpGet('https://raw.githubusercontent.com/zic1/LinoriaLib/refs/heads/main/Library.lua'))()
 local ThemeManager = loadstring(game:HttpGet('https://raw.githubusercontent.com/zic1/LinoriaLib/refs/heads/main/addons/ThemeManager.lua'))()
 local SaveManager = loadstring(game:HttpGet('https://raw.githubusercontent.com/zic1/LinoriaLib/refs/heads/main/addons/SaveManager.lua'))()
@@ -16,18 +16,17 @@ local plr = Players.LocalPlayer
 
 -- ===== WEAPON SETTINGS (FROM MusketSettings.txt) =====
 local WEAPON_SETTINGS = {
-    Velocity = 1300,           -- Base bullet velocity in studs/second
-    VelocityDeviation = 60,    -- Random variation in velocity
+    Velocity = 1300,
+    VelocityDeviation = 60,
     BaseDamage = 100,
     MinDamage = 80,
     BaseDmgDistance = 250,
     MinDmgDistance = 600,
-    Deviation = 1.7,           -- Spread/accuracy deviation
+    Deviation = 1.7,
     RecoilMagnitude = 12,
     ReloadTime = 15,
     AimTime = 0.5,
     SwayFactor = 0.08,
-    MinDamage = 80,
 }
 
 -- ===== CHANT PACKAGE LIST =====
@@ -53,7 +52,7 @@ local config = {
     smoothing = 0.3,
     wallCheck = false,
     prediction = 0.15,
-    bulletVelocity = WEAPON_SETTINGS.Velocity,  -- 1300
+    bulletVelocity = WEAPON_SETTINGS.Velocity,
     bulletDrop = 5,
     autoPrediction = true,
     gravityCompensation = 1.0,
@@ -67,7 +66,7 @@ local config = {
     hitboxTeamCheck = false,
     hitboxPart = "Head",
     chantPackage = "English",
-    velocityDeviation = WEAPON_SETTINGS.VelocityDeviation, -- 60
+    velocityDeviation = WEAPON_SETTINGS.VelocityDeviation,
 }
 
 -- ===== STATE =====
@@ -379,7 +378,7 @@ local function updateTargetVelocities()
     end
 end
 
--- ===== PREDICT POSITION (Using Accurate Musket Settings) =====
+-- ===== PREDICT POSITION =====
 local function predictPosition(targetPart, player)
     if not targetPart or not targetPart.Parent then
         return targetPart and targetPart.Position or Vector3.new(0, 0, 0)
@@ -388,39 +387,25 @@ local function predictPosition(targetPart, player)
     local basePosition = targetPart.Position
     local cameraPos = Camera.CFrame.Position
     local distance = (basePosition - cameraPos).Magnitude
-    
-    -- Use the accurate velocity from MusketSettings.txt (1300 studs/s)
     local bulletVelocity = config.bulletVelocity or WEAPON_SETTINGS.Velocity
     local bulletTravelTime = math.clamp(distance / bulletVelocity, 0.01, 3)
     local pingComp = autoCalc.ping or 0.05
     
-    -- ===== MOVEMENT PREDICTION =====
     if config.autoPrediction and targetVelocities[player] then
         local velocity = targetVelocities[player]
         if velocity and velocity.Magnitude > 1 then
-            -- Calculate lead time based on bullet travel time and ping
             local leadTime = bulletTravelTime * config.prediction + pingComp
-            
-            -- Speed multiplier for faster targets (up to 2x lead)
             local speedMult = math.min(velocity.Magnitude / 30, 2)
             leadTime = leadTime * (1 + speedMult * 0.3)
-            
-            -- Apply prediction
             basePosition = basePosition + (velocity * leadTime)
         end
     end
     
-    -- ===== BULLET DROP COMPENSATION =====
-    -- Using physics formula: drop = 0.5 * gravity * time^2
     if config.bulletDrop > 0 then
         local predDist = (basePosition - cameraPos).Magnitude
         local travelTime = math.clamp(predDist / bulletVelocity, 0.01, 3)
-        
-        -- Calculate drop
         local drop = 0.5 * config.bulletDrop * travelTime * travelTime
         drop = drop * config.gravityCompensation
-        
-        -- Aim higher to compensate
         basePosition = basePosition + Vector3.new(0, drop, 0)
     end
     
@@ -747,8 +732,9 @@ HitboxGroup:AddSlider("HitboxSize", {
     end
 })
 
-HitboxGroup:AddColorPicker("HitboxColor", {
-    Text = "Hitbox Color",
+-- FIX: ColorPicker added via Label:AddColorPicker
+local colorLabel = HitboxGroup:AddLabel("Hitbox Color")
+colorLabel:AddColorPicker("HitboxColor", {
     Default = config.hitboxColor,
     Callback = function(v)
         config.hitboxColor = v
@@ -813,6 +799,7 @@ ChantGroup:AddDropdown("ChantPackage", {
     end
 })
 
+-- FIX: Button uses Func not Callback
 ChantGroup:AddButton({
     Text = "Refresh Chant",
     Func = function()
@@ -855,6 +842,7 @@ SettingsGroup:AddKeyPicker("ToggleKey", {
 
 local ActionsGroup = SettingsTab:AddRightGroupbox("Actions")
 
+-- FIX: Button uses Func not Callback
 ActionsGroup:AddButton({
     Text = "Refresh Hitboxes",
     Func = function()
