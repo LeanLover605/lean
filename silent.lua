@@ -3,41 +3,6 @@ local Library = loadstring(game:HttpGet('https://raw.githubusercontent.com/zic1/
 local ThemeManager = loadstring(game:HttpGet('https://raw.githubusercontent.com/zic1/LinoriaLib/refs/heads/main/addons/ThemeManager.lua'))()
 local SaveManager = loadstring(game:HttpGet('https://raw.githubusercontent.com/zic1/LinoriaLib/refs/heads/main/addons/SaveManager.lua'))()
 
--- ===== ESP LIBRARY LOADING =====
-local esplib = loadstring(game:HttpGet("https://raw.githubusercontent.com/tulontop/esp-lib.lua/refs/heads/main/source.lua"))()
-
--- ===== ESP CONFIGURATION =====
-getgenv().esplib = {
-    box = {
-        enabled = true,
-        type = "normal",
-        padding = 1.15,
-        fill = Color3.new(1, 1, 1),
-        outline = Color3.new(0, 0, 0),
-    },
-    healthbar = {
-        enabled = true,
-        fill = Color3.new(0, 1, 0),
-        outline = Color3.new(0, 0, 0),
-    },
-    name = {
-        enabled = true,
-        fill = Color3.new(1, 1, 1),
-        size = 13,
-    },
-    distance = {
-        enabled = true,
-        fill = Color3.new(1, 1, 1),
-        size = 13,
-    },
-    tracer = {
-        enabled = false,
-        fill = Color3.new(1, 1, 1),
-        outline = Color3.new(0, 0, 0),
-        from = "bottom",
-    },
-}
-
 -- ===== SERVICES =====
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -143,7 +108,14 @@ local isUILoaded = false
 
 -- ===== ESP STATE =====
 local espObjects = {}
-local espEnabledPlayers = {}
+
+-- ===== UI SLIDER REFERENCES =====
+local sliderElements = {
+    predictionSlider = nil,
+    velocitySlider = nil,
+    dropSlider = nil,
+    compensationSlider = nil,
+}
 
 -- ===== CONNECTIONS (FOR CLEANUP) =====
 local connections = {
@@ -174,6 +146,9 @@ local autoCalc = {
     },
     remoteFound = false,
     remoteName = nil,
+    autoCalcRunning = false,
+    lastAutoUpdate = 0,
+    autoUpdateInterval = 0.5,
 }
 
 -- ===== FOV CIRCLE (DRAWING API) =====
@@ -213,6 +188,35 @@ local function updateFOVPosition()
     fovCircle.Position = Vector2.new(mousePos.X, mousePos.Y)
 end
 
+-- ===== UPDATE UI SLIDERS =====
+local function updateUISliders()
+    if not isUILoaded then return end
+    
+    if sliderElements.predictionSlider then
+        pcall(function()
+            sliderElements.predictionSlider:Set(config.prediction)
+        end)
+    end
+    
+    if sliderElements.velocitySlider then
+        pcall(function()
+            sliderElements.velocitySlider:Set(config.bulletVelocity)
+        end)
+    end
+    
+    if sliderElements.dropSlider then
+        pcall(function()
+            sliderElements.dropSlider:Set(config.bulletDrop)
+        end)
+    end
+    
+    if sliderElements.compensationSlider then
+        pcall(function()
+            sliderElements.compensationSlider:Set(config.gravityCompensation)
+        end)
+    end
+end
+
 -- ===== CLEANUP FUNCTION =====
 local function cleanup()
     print("Cleaning up VaM Client...")
@@ -222,8 +226,16 @@ local function cleanup()
         fovCircle = nil
     end
     
-    for player, _ in pairs(espEnabledPlayers) do
-        espEnabledPlayers[player] = nil
+    -- Clean up ESP drawing objects
+    for player, data in pairs(espObjects) do
+        if data.box then pcall(function() data.box:Remove() end) end
+        if data.boxOutline then pcall(function() data.boxOutline:Remove() end) end
+        if data.healthbar then pcall(function() data.healthbar:Remove() end) end
+        if data.healthbg then pcall(function() data.healthbg:Remove() end) end
+        if data.nameText then pcall(function() data.nameText:Remove() end) end
+        if data.distanceText then pcall(function() data.distanceText:Remove() end) end
+        if data.tracer then pcall(function() data.tracer:Remove() end) end
+        if data.connection then pcall(function() data.connection:Disconnect() end) end
     end
     espObjects = {}
     
@@ -715,6 +727,104 @@ local function updateTargetVelocities()
     end
 end
 
+-- ===== AUTO-CALCULATE PREDICTION VALUES =====
+local function autoCalculateValues(targetPart, player, distance, bulletTravelTime)
+    if not config.autoPrediction and not config.autoBulletDrop then
+        return
+    end
+    
+    local currentTime = tick()
+    if currentTime - autoCalc.lastAutoUpdate < autoCalc.autoUpdateInterval then
+        return
+    end
+    autoCalc.lastAutoUpdate = currentTime
+    
+    if not targetPart or not player then
+        return
+    end
+    
+    local targetVelocity = targetVelocities[player]
+    if not targetVelocity then
+        return
+    end
+    
+    local targetSpeed = targetVelocity.Magnitude
+    if targetSpeed < 1 then
+        return
+    end
+    
+    -- ===== AUTO LEAD CALCULATION =====
+    if config.autoPrediction then
+        local toTarget = (targetPart.Position - Camera.CFrame.Position).Unit
+        local angle = math.acos(math.clamp(toTarget:Dot(targetVelocity.Unit), -1, 1))
+        local perpendicularFactor = math.abs(math.sin(angle))
+        
+        local targetVelocityAlongShot = targetSpeed * math.cos(angle)
+        local relativeVelocity = config.bulletVelocity - targetVelocityAlongShot
+        if relativeVelocity < 1 then relativeVelocity = 1 end
+        
+        local optimalLeadTime = distance / relativeVelocity
+        optimalLeadTime = math.clamp(optimalLeadTime, 0.01, 1)
+        
+        if perpendicularFactor > 0.3 then
+            optimalLeadTime = optimalLeadTime * (1 + perpendicularFactor * 0.5)
+        end
+        
+        optimalLeadTime = optimalLeadTime + autoCalc.ping
+        
+        local speedMultiplier = math.min(targetSpeed / 20, 3)
+        optimalLeadTime = optimalLeadTime * (1 + speedMultiplier * 0.3)
+        
+        local newPrediction = optimalLeadTime / bulletTravelTime * 0.5
+        newPrediction = math.clamp(newPrediction, 0.05, 0.5)
+        
+        config.prediction = config.prediction * 0.7 + newPrediction * 0.3
+        config.prediction = math.clamp(config.prediction, 0.05, 0.5)
+        
+        autoCalc.calibrationValues.prediction.current = config.prediction
+        
+        if config.debugMode then
+            print(string.format("Auto Lead: Speed=%.1f, Lead=%.3f, Angle=%.1f°", 
+                targetSpeed, config.prediction, math.deg(angle)))
+        end
+    end
+    
+    -- ===== AUTO BULLET DROP CALCULATION =====
+    if config.autoBulletDrop then
+        local travelTime = distance / config.bulletVelocity
+        if travelTime < 0.01 then travelTime = 0.01 end
+        
+        local heightDiff = targetPart.Position.Y - Camera.CFrame.Position.Y
+        
+        local optimalGravity = 0
+        if travelTime > 0 then
+            optimalGravity = (2 * math.abs(heightDiff)) / (travelTime * travelTime)
+            
+            if math.abs(heightDiff) < 1 then
+                local dropFactor = 1 + (distance / 500) * 2
+                optimalGravity = 20 * dropFactor
+            end
+        end
+        
+        optimalGravity = math.clamp(optimalGravity, 1, 250)
+        optimalGravity = optimalGravity * config.gravityCompensation
+        
+        local newBulletDrop = config.bulletDrop * 0.6 + optimalGravity * 0.4
+        newBulletDrop = math.clamp(newBulletDrop, 0, 250)
+        
+        config.bulletDrop = newBulletDrop
+        
+        autoCalc.calibrationValues.bulletDrop.current = config.bulletDrop
+        
+        if config.debugMode then
+            print(string.format("Auto Drop: Dist=%.1f, Drop=%.1f, HeightDiff=%.1f", 
+                distance, config.bulletDrop, heightDiff))
+        end
+    end
+    
+    updateUISliders()
+end
+
 -- ===== PREDICT POSITION =====
 local function predictPosition(targetPart, player)
     if not targetPart or not targetPart.Parent then
@@ -729,6 +839,11 @@ local function predictPosition(targetPart, player)
     
     local bulletTravelTime = math.clamp(distance / bulletVelocity, 0.01, 5)
     
+    if (config.autoPrediction or config.autoBulletDrop) and player then
+        autoCalculateValues(targetPart, player, distance, bulletTravelTime)
+    end
+    
+    -- ===== MOVEMENT PREDICTION =====
     if config.autoPrediction and targetVelocities[player] then
         local velocity = targetVelocities[player]
         if velocity and velocity.Magnitude > 1 then
@@ -754,6 +869,7 @@ local function predictPosition(targetPart, player)
         end
     end
     
+    -- ===== BULLET DROP COMPENSATION =====
     local drop = 0
     if config.bulletDrop > 0 then
         local predDist = (basePosition - cameraPos).Magnitude
@@ -802,7 +918,9 @@ local function getClosestTarget()
                     if targetPart and targetPart.Parent then
                         local predictedPos = predictPosition(targetPart, player)
                         local toTarget = predictedPos - cameraPos
-                        if toTarget:Dot(Camera.CFrame.LookVector) < 0 then continue end
+                        if toTarget:Dot(Camera.CFrame.LookVector) < 0 then
+                            continue
+                        end
                         
                         local screenPos, onScreen = Camera:WorldToViewportPoint(predictedPos)
                         if onScreen then
@@ -861,7 +979,7 @@ local function onRenderStepped()
     end
 end
 
--- ===== ESP FUNCTIONS (Using esp-lib.lua) =====
+-- ===== ESP FUNCTIONS (SMOOTH UPDATES ON RENDERSTEPPED) =====
 local function isPlayerBehindWall(player)
     if not player or not player.Character then return false end
     
@@ -906,25 +1024,16 @@ local function getTeamColor(player)
     return Color3.fromRGB(255, 255, 255)
 end
 
-local function updateESPColors()
-    local espSettings = getgenv().esplib
-    if not espSettings then return end
-    
-    espSettings.box.fill = config.espBoxColor
-    espSettings.healthbar.fill = config.espHealthColor
-    espSettings.name.fill = config.espNameColor
-    espSettings.distance.fill = config.espDistanceColor
-    espSettings.tracer.fill = config.espTracerColor
-end
-
 local function getESPColorForPlayer(player)
-    if not player then return config.espBoxColor
-	end
+    if not player then
+        return config.espBoxColor
+    end
+    
     local isBehindWall = false
     if config.espWallCheck then
         isBehindWall = isPlayerBehindWall(player)
     end
-    
+
     if config.espWallCheck and isBehindWall then
         if config.espUseTeamColor then
             local teamColor = getTeamColor(player)
@@ -934,171 +1043,382 @@ local function getESPColorForPlayer(player)
             return config.espWallColor
         end
     else
-        return config.espBoxColor
-    end
-end
-local function refreshESPForPlayer(player)
-    if not player or player == plr then return end
-    if espEnabledPlayers[player] then
-        removeESPForPlayer(player)
-    end
-    if config.espEnabled then
-        setupESPForPlayer(player)
+        if config.espUseTeamColor then
+            return getTeamColor(player)
+        else
+            return config.espBoxColor
+        end
     end
 end
 
-local function setupESPForPlayer(player)
-    if player == plr then return end
-    if espEnabledPlayers[player] then return end
+-- ===== GET BOUNDING BOX =====
+local function getBoundingBox(character)
+    local min = Vector2.new(math.huge, math.huge)
+    local max = Vector2.new(-math.huge, -math.huge)
+    local onscreen = false
+    local padding = 1.15
     
-    local function shouldShowESP()
-        if not player or not player.Character then return false end
-        if config.espTeamCheck and player.Team == plr.Team then return false end
-        local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
-        if not humanoid or humanoid.Health <= 0 then return false end
-        return true
+    local parts = {}
+    for _, child in ipairs(character:GetChildren()) do
+        if child:IsA("BasePart") then
+            table.insert(parts, child)
+        elseif child:IsA("Accessory") then
+            local handle = child:FindFirstChild("Handle")
+            if handle and handle:IsA("BasePart") then
+                table.insert(parts, handle)
+            end
+        end
     end
     
-    if not shouldShowESP() then
+    if #parts == 0 then
+        return min, max, false
+    end
+    
+    for _, part in ipairs(parts) do
+        local size = part.Size / 2 * padding
+        local cf = part.CFrame
+        local corners = {
+            Vector3.new( size.X,  size.Y,  size.Z),
+            Vector3.new(-size.X,  size.Y,  size.Z),
+            Vector3.new( size.X, -size.Y,  size.Z),
+            Vector3.new(-size.X, -size.Y,  size.Z),
+            Vector3.new( size.X,  size.Y, -size.Z),
+            Vector3.new(-size.X,  size.Y, -size.Z),
+            Vector3.new( size.X, -size.Y, -size.Z),
+            Vector3.new(-size.X, -size.Y, -size.Z),
+        }
+        
+        for _, offset in ipairs(corners) do
+            local pos, visible = Camera:WorldToViewportPoint(cf:PointToWorldSpace(offset))
+            if visible then
+                local v2 = Vector2.new(pos.X, pos.Y)
+                min = Vector2.new(math.min(min.X, v2.X), math.min(min.Y, v2.Y))
+                max = Vector2.new(math.max(max.X, v2.X), math.max(max.Y, v2.Y))
+                onscreen = true
+            end
+        end
+    end
+    
+    return min, max, onscreen
+end
+
+-- ===== CREATE ESP OBJECTS FOR A PLAYER =====
+local function createESPForPlayer(player)
+    if not player or player == plr then
+        return
+    end
+    if espObjects[player] then
+        return
+    end
+    if not player.Character then
         return
     end
     
-    local character = player.Character
-    if not character then return end
+    local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
+    if not humanoid or humanoid.Health <= 0 then
+        return
+    end
     
-    updateESPColors()
+    if config.espTeamCheck and player.Team == plr.Team then
+        return
+    end
     
-    local playerColor = getESPColorForPlayer(player)
-    local espSettings = getgenv().esplib
-    local originalBoxColor = espSettings.box.fill
-    local originalNameColor = espSettings.name.fill
-    local originalDistColor = espSettings.distance.fill
-    
-    espSettings.box.fill = playerColor
-    espSettings.name.fill = playerColor
-    espSettings.distance.fill = playerColor
+    local espData = {
+        box = nil,
+        boxOutline = nil,
+        healthbar = nil,
+        healthbg = nil,
+        nameText = nil,
+        distanceText = nil,
+        tracer = nil,
+        visible = true,
+    }
     
     if config.espBoxEnabled then
-        esplib.add_box(character)
+        local box = Drawing.new("Square")
+        box.Thickness = 2
+        box.Filled = false
+        box.Transparency = 1
+        box.Visible = false
+        espData.box = box
+        
+        local boxOutline = Drawing.new("Square")
+        boxOutline.Thickness = 3
+        boxOutline.Filled = false
+        boxOutline.Transparency = 0.8
+        boxOutline.Color = Color3.new(0, 0, 0)
+        boxOutline.Visible = false
+        espData.boxOutline = boxOutline
     end
+    
     if config.espHealthbarEnabled then
-        esplib.add_healthbar(character)
+        local healthbar = Drawing.new("Square")
+        healthbar.Thickness = 1
+        healthbar.Filled = true
+        healthbar.Transparency = 1
+        healthbar.Visible = false
+        espData.healthbar = healthbar
+        
+        local healthbg = Drawing.new("Square")
+        healthbg.Thickness = 1
+        healthbg.Filled = true
+        healthbg.Transparency = 0.6
+        healthbg.Color = Color3.new(0, 0, 0)
+        healthbg.Visible = false
+        espData.healthbg = healthbg
     end
+    
     if config.espNameEnabled then
-        esplib.add_name(character)
+        local nameText = Drawing.new("Text")
+        nameText.Center = true
+        nameText.Outline = true
+        nameText.Font = 1
+        nameText.Size = 14
+        nameText.Transparency = 1
+        nameText.Visible = false
+        espData.nameText = nameText
     end
+    
     if config.espDistanceEnabled then
-        esplib.add_distance(character)
+        local distanceText = Drawing.new("Text")
+        distanceText.Center = true
+        distanceText.Outline = true
+        distanceText.Font = 1
+        distanceText.Size = 12
+        distanceText.Transparency = 1
+        distanceText.Visible = false
+        espData.distanceText = distanceText
     end
+    
     if config.espTracerEnabled then
-        esplib.add_tracer(character)
+        local tracer = Drawing.new("Line")
+        tracer.Thickness = 2
+        tracer.Transparency = 0.7
+        tracer.Visible = false
+        espData.tracer = tracer
     end
     
-    espSettings.box.fill = originalBoxColor
-    espSettings.name.fill = originalNameColor
-    espSettings.distance.fill = originalDistColor
-    
-    espEnabledPlayers[player] = true
-    
-    if not espObjects[player] then
-        espObjects[player] = {}
-    end
-    
-    if not espObjects[player].connection then
-        espObjects[player].connection = player.CharacterAdded:Connect(function(newCharacter)
-            task.wait(0.5)
-            if shouldShowESP() then
-                updateESPColors()
-                local newColor = getESPColorForPlayer(player)
-                espSettings.box.fill = newColor
-                espSettings.name.fill = newColor
-                espSettings.distance.fill = newColor
-                
-                if config.espBoxEnabled then
-                    esplib.add_box(newCharacter)
-                end
-                if config.espHealthbarEnabled then
-                    esplib.add_healthbar(newCharacter)
-                end
-                if config.espNameEnabled then
-                    esplib.add_name(newCharacter)
-                end
-                if config.espDistanceEnabled then
-                    esplib.add_distance(newCharacter)
-                end
-                if config.espTracerEnabled then
-                    esplib.add_tracer(newCharacter)
-                end
-                
-                espSettings.box.fill = originalBoxColor
-                espSettings.name.fill = originalNameColor
-                espSettings.distance.fill = originalDistColor
-            end
-        end)
-    end
+    espObjects[player] = espData
+    return espData
 end
 
-local function removeESPForPlayer(player)
-    if not espEnabledPlayers[player] then return end
-    espEnabledPlayers[player] = nil
+-- ===== UPDATE ESP FOR A PLAYER =====
+local function updateESPForPlayer(player)
+    local espData = espObjects[player]
+    if not espData then
+        return
+    end
     
-    if espObjects[player] then
-        if espObjects[player].connection then
-            pcall(function()
-                espObjects[player].connection:Disconnect()
-            end)
+    if not player or not player.Character then
+        -- Hide all ESP elements
+        if espData.box then espData.box.Visible = false end
+        if espData.boxOutline then espData.boxOutline.Visible = false end
+        if espData.healthbar then espData.healthbar.Visible = false end
+        if espData.healthbg then espData.healthbg.Visible = false end
+        if espData.nameText then espData.nameText.Visible = false end
+        if espData.distanceText then espData.distanceText.Visible = false end
+        if espData.tracer then espData.tracer.Visible = false end
+        espData.visible = false
+        return
+    end
+    
+    local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
+    if not humanoid or humanoid.Health <= 0 then
+        if espData.box then espData.box.Visible = false end
+        if espData.boxOutline then espData.boxOutline.Visible = false end
+        if espData.healthbar then espData.healthbar.Visible = false end
+        if espData.healthbg then espData.healthbg.Visible = false end
+        if espData.nameText then espData.nameText.Visible = false end
+        if espData.distanceText then espData.distanceText.Visible = false end
+        if espData.tracer then espData.tracer.Visible = false end
+        espData.visible = false
+        return
+    end
+    
+    if config.espTeamCheck and player.Team == plr.Team then
+        if espData.box then espData.box.Visible = false end
+        if espData.boxOutline then espData.boxOutline.Visible = false end
+        if espData.healthbar then espData.healthbar.Visible = false end
+        if espData.healthbg then espData.healthbg.Visible = false end
+        if espData.nameText then espData.nameText.Visible = false end
+        if espData.distanceText then espData.distanceText.Visible = false end
+        if espData.tracer then espData.tracer.Visible = false end
+        espData.visible = false
+        return
+    end
+    
+    local targetPart = getTargetPart(player)
+    if not targetPart then
+        if espData.box then espData.box.Visible = false end
+        if espData.boxOutline then espData.boxOutline.Visible = false end
+        if espData.healthbar then espData.healthbar.Visible = false end
+        if espData.healthbg then espData.healthbg.Visible = false end
+        if espData.nameText then espData.nameText.Visible = false end
+        if espData.distanceText then espData.distanceText.Visible = false end
+        if espData.tracer then espData.tracer.Visible = false end
+        espData.visible = false
+        return
+    end
+    
+    local min, max, onscreen = getBoundingBox(player.Character)
+    if not onscreen then
+        -- Hide all ESP elements when off-screen
+        if espData.box then espData.box.Visible = false end
+        if espData.boxOutline then espData.boxOutline.Visible = false end
+        if espData.healthbar then espData.healthbar.Visible = false end
+        if espData.healthbg then espData.healthbg.Visible = false end
+        if espData.nameText then espData.nameText.Visible = false end
+        if espData.distanceText then espData.distanceText.Visible = false end
+        if espData.tracer then espData.tracer.Visible = false end
+        espData.visible = false
+        return
+    end
+    
+    espData.visible = true
+    
+    local mainColor = getESPColorForPlayer(player)
+    
+    local boxPos = min
+    local boxSize = max - min
+    local center = (min + max) / 2
+    
+    if espData.box and config.espBoxEnabled then
+        espData.box.Position = boxPos
+        espData.box.Size = boxSize
+        espData.box.Color = mainColor
+        espData.box.Visible = true
+        
+        if espData.boxOutline then
+            espData.boxOutline.Position = boxPos - Vector2.new(1, 1)
+            espData.boxOutline.Size = boxSize + Vector2.new(2, 2)
+            espData.boxOutline.Visible = true
         end
-        espObjects[player] = nil
+    end
+    
+    if espData.healthbar and config.espHealthbarEnabled then
+        local health = humanoid.Health / humanoid.MaxHealth
+        local barWidth = 3
+        local barHeight = boxSize.Y
+        
+        espData.healthbg.Position = Vector2.new(boxPos.X - barWidth - 2, boxPos.Y)
+        espData.healthbg.Size = Vector2.new(barWidth, barHeight)
+        espData.healthbg.Visible = true
+        
+        local fillHeight = barHeight * health
+        espData.healthbar.Position = Vector2.new(boxPos.X - barWidth - 2, boxPos.Y + barHeight - fillHeight)
+        espData.healthbar.Size = Vector2.new(barWidth, fillHeight)
+        espData.healthbar.Color = Color3.new(1 - health, health, 0)
+        espData.healthbar.Visible = true
+    end
+    
+    if espData.nameText and config.espNameEnabled then
+        espData.nameText.Text = player.Name
+        espData.nameText.Position = Vector2.new(center.X, min.Y - 18)
+        espData.nameText.Color = mainColor
+        espData.nameText.Visible = true
+    end
+    
+    if espData.distanceText and config.espDistanceEnabled then
+        local distance = (targetPart.Position - Camera.CFrame.Position).Magnitude
+        espData.distanceText.Text = math.floor(distance) .. "m"
+        espData.distanceText.Position = Vector2.new(center.X, max.Y + 16)
+        espData.distanceText.Color = mainColor
+        espData.distanceText.Visible = true
+    end
+    
+    if espData.tracer and config.espTracerEnabled then
+        local mousePos = UserInputService:GetMouseLocation()
+        espData.tracer.From = Vector2.new(mousePos.X, mousePos.Y)
+        espData.tracer.To = center
+        espData.tracer.Color = mainColor
+        espData.tracer.Visible = true
     end
 end
 
+-- ===== UPDATE ALL ESP (CALLED EVERY RENDER STEP) =====
 local function updateAllESP()
-    updateESPColors()
-    
-    for player, _ in pairs(espEnabledPlayers) do
+    -- Remove ESP for players that no longer exist
+    for player, espData in pairs(espObjects) do
         if not player or not player.Parent or player == plr then
-            removeESPForPlayer(player)
-            continue
-        end
-        
-        if not player.Character then
-            removeESPForPlayer(player)
-            continue
-        end
-        
-        local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
-        if not humanoid or humanoid.Health <= 0 then
-            removeESPForPlayer(player)
-            continue
-        end
-        
-        if config.espTeamCheck and player.Team == plr.Team then
-            removeESPForPlayer(player)
-            continue
+            if espData.box then pcall(function() espData.box:Remove() end) end
+            if espData.boxOutline then pcall(function() espData.boxOutline:Remove() end) end
+            if espData.healthbar then pcall(function() espData.healthbar:Remove() end) end
+            if espData.healthbg then pcall(function() espData.healthbg:Remove() end) end
+            if espData.nameText then pcall(function() espData.nameText:Remove() end) end
+            if espData.distanceText then pcall(function() espData.distanceText:Remove() end) end
+            if espData.tracer then pcall(function() espData.tracer:Remove() end) end
+            espObjects[player] = nil
         end
     end
     
+    -- Create ESP for new players
     for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= plr and player.Character and player.Character.Parent then
-            if config.espTeamCheck and player.Team == plr.Team then
-                if espEnabledPlayers[player] then
-                    removeESPForPlayer(player)
-                end
-                continue
-            end
-            
-            local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
-            if humanoid and humanoid.Health > 0 then
-                if not espEnabledPlayers[player] then
-                    setupESPForPlayer(player)
-                end
-            else
-                if espEnabledPlayers[player] then
-                    removeESPForPlayer(player)
+        if player ~= plr and not espObjects[player] then
+            if config.espEnabled then
+                if player.Character then
+                    local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
+                    if humanoid and humanoid.Health > 0 then
+                        createESPForPlayer(player)
+                    end
                 end
             end
         end
     end
+    
+    -- Update ESP for all players
+    for player, _ in pairs(espObjects) do
+        if config.espEnabled then
+            updateESPForPlayer(player)
+        else
+            local espData = espObjects[player]
+            if espData.box then espData.box.Visible = false end
+            if espData.boxOutline then espData.boxOutline.Visible = false end
+            if espData.healthbar then espData.healthbar.Visible = false end
+            if espData.healthbg then espData.healthbg.Visible = false end
+            if espData.nameText then espData.nameText.Visible = false end
+            if espData.distanceText then espData.distanceText.Visible = false end
+            if espData.tracer then espData.tracer.Visible = false end
+        end
+    end
+end
+
+-- ===== HANDLE PLAYER RESPAWN =====
+local function setupPlayerRespawnHandler(player)
+    if player == plr then
+        return
+    end
+    
+    local charRemovingConn
+    charRemovingConn = player.CharacterRemoving:Connect(function()
+        if espObjects[player] then
+            local espData = espObjects[player]
+            if espData.box then pcall(function() espData.box:Remove() end) end
+            if espData.boxOutline then pcall(function() espData.boxOutline:Remove() end) end
+            if espData.healthbar then pcall(function() espData.healthbar:Remove() end) end
+            if espData.healthbg then pcall(function() espData.healthbg:Remove() end) end
+            if espData.nameText then pcall(function() espData.nameText:Remove() end) end
+            if espData.distanceText then pcall(function() espData.distanceText:Remove() end) end
+            if espData.tracer then pcall(function() espData.tracer:Remove() end) end
+            espObjects[player] = nil
+        end
+        if charRemovingConn then
+            charRemovingConn:Disconnect()
+        end
+    end)
+    
+    local charAddedConn
+    charAddedConn = player.CharacterAdded:Connect(function(character)
+        task.wait(0.5)
+        if config.espEnabled then
+            local humanoid = character:FindFirstChildOfClass("Humanoid")
+            if humanoid and humanoid.Health > 0 then
+                createESPForPlayer(player)
+            end
+        end
+        if charAddedConn then
+            charAddedConn:Disconnect()
+        end
+    end)
 end
 
 -- ===== CREATE UI =====
@@ -1175,9 +1495,18 @@ SilentAimGroup:AddSlider("Smoothing", {
 local PredictionGroup = PredictionTab:AddLeftGroupbox("Prediction")
 
 PredictionGroup:AddToggle("AutoPrediction", {
-    Text = "Auto Prediction",
+    Text = "Auto Lead",
+    Desc = "Automatically calculate lead based on target speed and distance",
     Default = config.autoPrediction,
-    Callback = function(v) config.autoPrediction = v end
+    Callback = function(v)
+        config.autoPrediction = v
+        print("Auto lead: " .. (v and "ON" or "OFF"))
+        if not v then
+            config.prediction = 0.25
+            autoCalc.calibrationValues.prediction.current = config.prediction
+            updateUISliders()
+        end
+    end
 })
 
 PredictionGroup:AddToggle("AutoBulletDrop", {
@@ -1187,11 +1516,17 @@ PredictionGroup:AddToggle("AutoBulletDrop", {
     Callback = function(v)
         config.autoBulletDrop = v
         print("Auto bullet drop: " .. (v and "ON" or "OFF"))
+        if not v then
+            config.bulletDrop = 5
+            autoCalc.calibrationValues.bulletDrop.current = config.bulletDrop
+            updateUISliders()
+        end
     end
 })
 
-PredictionGroup:AddSlider("PredictionMultiplier", {
+local predictionSlider = PredictionGroup:AddSlider("PredictionMultiplier", {
     Text = "Prediction Multiplier",
+    Desc = "How much to lead moving targets (higher = more lead)",
     Default = config.prediction,
     Min = 0,
     Max = 1,
@@ -1201,9 +1536,11 @@ PredictionGroup:AddSlider("PredictionMultiplier", {
         autoCalc.calibrationValues.prediction.current = v
     end
 })
+sliderElements.predictionSlider = predictionSlider
 
-PredictionGroup:AddSlider("BulletVelocity", {
+local velocitySlider = PredictionGroup:AddSlider("BulletVelocity", {
     Text = "Bullet Velocity (Musket: 1300)",
+    Desc = "Bullet speed in studs/second",
     Default = config.bulletVelocity,
     Min = 100,
     Max = 2000,
@@ -1213,8 +1550,9 @@ PredictionGroup:AddSlider("BulletVelocity", {
         autoCalc.calibrationValues.bulletVelocity.current = v
     end
 })
+sliderElements.velocitySlider = velocitySlider
 
-PredictionGroup:AddSlider("BulletDrop", {
+local dropSlider = PredictionGroup:AddSlider("BulletDrop", {
     Text = "Bullet Drop (Gravity)",
     Desc = "Gravitational acceleration in studs/s². Normal Roblox gravity is 196.2",
     Default = config.bulletDrop,
@@ -1226,9 +1564,11 @@ PredictionGroup:AddSlider("BulletDrop", {
         autoCalc.calibrationValues.bulletDrop.current = v
     end
 })
+sliderElements.dropSlider = dropSlider
 
-PredictionGroup:AddSlider("DropCompensation", {
+local compensationSlider = PredictionGroup:AddSlider("DropCompensation", {
     Text = "Drop Compensation",
+    Desc = "Multiplier for bullet drop compensation",
     Default = config.gravityCompensation,
     Min = 0.5,
     Max = 3.0,
@@ -1238,6 +1578,7 @@ PredictionGroup:AddSlider("DropCompensation", {
         autoCalc.calibrationValues.gravityCompensation.current = v
     end
 })
+sliderElements.compensationSlider = compensationSlider
 
 PredictionGroup:AddSlider("LongRangeCompensation", {
     Text = "Long Range Drop Bonus",
@@ -1286,12 +1627,23 @@ ESPGroup:AddToggle("ESPEnabled", {
     Callback = function(v)
         config.espEnabled = v
         if v then
-            updateAllESP()
-        else
-            for player, _ in pairs(espEnabledPlayers) do
-                removeESPForPlayer(player)
+            for _, player in ipairs(Players:GetPlayers()) do
+                if player ~= plr then
+                    task.wait(0.1)
+                    createESPForPlayer(player)
+                end
             end
-            espEnabledPlayers = {}
+        else
+            for player, espData in pairs(espObjects) do
+                if espData.box then pcall(function() espData.box:Remove() end) end
+                if espData.boxOutline then pcall(function() espData.boxOutline:Remove() end) end
+                if espData.healthbar then pcall(function() espData.healthbar:Remove() end) end
+                if espData.healthbg then pcall(function() espData.healthbg:Remove() end) end
+                if espData.nameText then pcall(function() espData.nameText:Remove() end) end
+                if espData.distanceText then pcall(function() espData.distanceText:Remove() end) end
+                if espData.tracer then pcall(function() espData.tracer:Remove() end) end
+            end
+            espObjects = {}
         end
     end
 })
@@ -1302,7 +1654,22 @@ ESPGroup:AddToggle("ESPTeamCheck", {
     Callback = function(v)
         config.espTeamCheck = v
         if config.espEnabled then
-            updateAllESP()
+            for player, espData in pairs(espObjects) do
+                if espData.box then pcall(function() espData.box:Remove() end) end
+                if espData.boxOutline then pcall(function() espData.boxOutline:Remove() end) end
+                if espData.healthbar then pcall(function() espData.healthbar:Remove() end) end
+                if espData.healthbg then pcall(function() espData.healthbg:Remove() end) end
+                if espData.nameText then pcall(function() espData.nameText:Remove() end) end
+                if espData.distanceText then pcall(function() espData.distanceText:Remove() end) end
+                if espData.tracer then pcall(function() espData.tracer:Remove() end) end
+            end
+            espObjects = {}
+            for _, player in ipairs(Players:GetPlayers()) do
+                if player ~= plr then
+                    task.wait(0.1)
+                    createESPForPlayer(player)
+                end
+            end
         end
     end
 })
@@ -1313,13 +1680,6 @@ ESPGroup:AddToggle("ESPWallCheck", {
     Default = config.espWallCheck,
     Callback = function(v)
         config.espWallCheck = v
-        if config.espEnabled then
-            for player, _ in pairs(espEnabledPlayers) do
-                removeESPForPlayer(player)
-            end
-            espEnabledPlayers = {}
-            updateAllESP()
-        end
     end
 })
 
@@ -1331,13 +1691,23 @@ ESPGroup:AddToggle("ESPBoxEnabled", {
     Default = config.espBoxEnabled,
     Callback = function(v)
         config.espBoxEnabled = v
-        getgenv().esplib.box.enabled = v
         if config.espEnabled then
-            for player, _ in pairs(espEnabledPlayers) do
-                removeESPForPlayer(player)
+            for player, espData in pairs(espObjects) do
+                if espData.box then pcall(function() espData.box:Remove() end) end
+                if espData.boxOutline then pcall(function() espData.boxOutline:Remove() end) end
+                if espData.healthbar then pcall(function() espData.healthbar:Remove() end) end
+                if espData.healthbg then pcall(function() espData.healthbg:Remove() end) end
+                if espData.nameText then pcall(function() espData.nameText:Remove() end) end
+                if espData.distanceText then pcall(function() espData.distanceText:Remove() end) end
+                if espData.tracer then pcall(function() espData.tracer:Remove() end) end
             end
-            espEnabledPlayers = {}
-            updateAllESP()
+            espObjects = {}
+            for _, player in ipairs(Players:GetPlayers()) do
+                if player ~= plr then
+                    task.wait(0.1)
+                    createESPForPlayer(player)
+                end
+            end
         end
     end
 })
@@ -1347,14 +1717,6 @@ ESPGroup:AddToggle("ESPHealthbarEnabled", {
     Default = config.espHealthbarEnabled,
     Callback = function(v)
         config.espHealthbarEnabled = v
-        getgenv().esplib.healthbar.enabled = v
-        if config.espEnabled then
-            for player, _ in pairs(espEnabledPlayers) do
-                removeESPForPlayer(player)
-            end
-            espEnabledPlayers = {}
-            updateAllESP()
-        end
     end
 })
 
@@ -1363,14 +1725,6 @@ ESPGroup:AddToggle("ESPNameEnabled", {
     Default = config.espNameEnabled,
     Callback = function(v)
         config.espNameEnabled = v
-        getgenv().esplib.name.enabled = v
-        if config.espEnabled then
-            for player, _ in pairs(espEnabledPlayers) do
-                removeESPForPlayer(player)
-            end
-            espEnabledPlayers = {}
-            updateAllESP()
-        end
     end
 })
 
@@ -1379,14 +1733,6 @@ ESPGroup:AddToggle("ESPDistanceEnabled", {
     Default = config.espDistanceEnabled,
     Callback = function(v)
         config.espDistanceEnabled = v
-        getgenv().esplib.distance.enabled = v
-        if config.espEnabled then
-            for player, _ in pairs(espEnabledPlayers) do
-                removeESPForPlayer(player)
-            end
-            espEnabledPlayers = {}
-            updateAllESP()
-        end
     end
 })
 
@@ -1395,13 +1741,17 @@ ESPGroup:AddToggle("ESPTracerEnabled", {
     Default = config.espTracerEnabled,
     Callback = function(v)
         config.espTracerEnabled = v
-        getgenv().esplib.tracer.enabled = v
+        -- Force refresh ESP when tracer is toggled
         if config.espEnabled then
-            for player, _ in pairs(espEnabledPlayers) do
-                removeESPForPlayer(player)
+            for player, espData in pairs(espObjects) do
+                if espData.tracer then
+                    if v then
+                        -- Tracer enabled, will be shown in update loop
+                    else
+                        espData.tracer.Visible = false
+                    end
+                end
             end
-            espEnabledPlayers = {}
-            updateAllESP()
         end
     end
 })
@@ -1414,13 +1764,6 @@ visibleColorLabel:AddColorPicker("ESPVisibleColor", {
     Default = config.espVisibleColor,
     Callback = function(v)
         config.espVisibleColor = v
-        if config.espEnabled then
-            for player, _ in pairs(espEnabledPlayers) do
-                removeESPForPlayer(player)
-            end
-            espEnabledPlayers = {}
-            updateAllESP()
-        end
     end
 })
 
@@ -1429,61 +1772,14 @@ hiddenColorLabel:AddColorPicker("ESPHiddenColor", {
     Default = config.espHiddenColor,
     Callback = function(v)
         config.espHiddenColor = v
-        if config.espEnabled then
-            for player, _ in pairs(espEnabledPlayers) do
-                removeESPForPlayer(player)
-            end
-            espEnabledPlayers = {}
-            updateAllESP()
-        end
     end
 })
 
-ESPGroup:AddDivider()
-ESPGroup:AddLabel("Individual Element Colors (Override)")
-
-local boxColorLabel = ESPGroup:AddLabel("Box Color")
-boxColorLabel:AddColorPicker("ESPBoxColor", {
-    Default = config.espBoxColor,
+ESPGroup:AddToggle("ESPUseTeamColor", {
+    Text = "Use Team Color",
+    Default = config.espUseTeamColor,
     Callback = function(v)
-        config.espBoxColor = v
-        updateESPColors()
-    end
-})
-
-local healthColorLabel = ESPGroup:AddLabel("Health Bar Color")
-healthColorLabel:AddColorPicker("ESPHealthColor", {
-    Default = config.espHealthColor,
-    Callback = function(v)
-        config.espHealthColor = v
-        updateESPColors()
-    end
-})
-
-local nameColorLabel = ESPGroup:AddLabel("Name Color")
-nameColorLabel:AddColorPicker("ESPNameColor", {
-    Default = config.espNameColor,
-    Callback = function(v)
-        config.espNameColor = v
-        updateESPColors()
-    end
-})
-
-local distColorLabel = ESPGroup:AddLabel("Distance Color")
-distColorLabel:AddColorPicker("ESPDistanceColor", {
-    Default = config.espDistanceColor,
-    Callback = function(v)
-        config.espDistanceColor = v
-        updateESPColors()
-    end
-})
-
-local tracerColorLabel = ESPGroup:AddLabel("Tracer Color")
-tracerColorLabel:AddColorPicker("ESPTracerColor", {
-    Default = config.espTracerColor,
-    Callback = function(v)
-        config.espTracerColor = v
-        updateESPColors()
+        config.espUseTeamColor = v
     end
 })
 
@@ -1491,11 +1787,22 @@ ESPGroup:AddButton({
     Text = "Refresh ESP",
     Func = function()
         if config.espEnabled then
-            for player, _ in pairs(espEnabledPlayers) do
-                removeESPForPlayer(player)
+            for player, espData in pairs(espObjects) do
+                if espData.box then pcall(function() espData.box:Remove() end) end
+                if espData.boxOutline then pcall(function() espData.boxOutline:Remove() end) end
+                if espData.healthbar then pcall(function() espData.healthbar:Remove() end) end
+                if espData.healthbg then pcall(function() espData.healthbg:Remove() end) end
+                if espData.nameText then pcall(function() espData.nameText:Remove() end) end
+                if espData.distanceText then pcall(function() espData.distanceText:Remove() end) end
+                if espData.tracer then pcall(function() espData.tracer:Remove() end) end
             end
-            espEnabledPlayers = {}
-            updateAllESP()
+            espObjects = {}
+            for _, player in ipairs(Players:GetPlayers()) do
+                if player ~= plr then
+                    task.wait(0.1)
+                    createESPForPlayer(player)
+                end
+            end
             print("ESP refreshed!")
         else
             print("ESP is disabled. Enable it first.")
@@ -1723,16 +2030,23 @@ if config.hitboxEnabled then
     hookHitRemote()
 end
 
+-- Setup ESP update loop on RenderStepped (smooth, every frame)
 connections.espUpdate = RunService.RenderStepped:Connect(function()
     if config.espEnabled then
         pcall(updateAllESP)
     end
 end)
 
+-- Setup player respawn handlers
+for _, player in ipairs(Players:GetPlayers()) do
+    setupPlayerRespawnHandler(player)
+end
+
 Players.PlayerAdded:Connect(function(player)
+    setupPlayerRespawnHandler(player)
     if config.espEnabled then
         task.wait(0.5)
-        pcall(function() setupESPForPlayer(player) end)
+        createESPForPlayer(player)
     end
     if config.hitboxEnabled then
         task.wait(0.5)
@@ -1746,8 +2060,16 @@ Players.PlayerRemoving:Connect(function(player)
     if playerHitboxes[player] then
         removeHitboxForPlayer(player)
     end
-    if espEnabledPlayers[player] then
-        removeESPForPlayer(player)
+    if espObjects[player] then
+        local espData = espObjects[player]
+        if espData.box then pcall(function() espData.box:Remove() end) end
+        if espData.boxOutline then pcall(function() espData.boxOutline:Remove() end) end
+        if espData.healthbar then pcall(function() espData.healthbar:Remove() end) end
+        if espData.healthbg then pcall(function() espData.healthbg:Remove() end) end
+        if espData.nameText then pcall(function() espData.nameText:Remove() end) end
+        if espData.distanceText then pcall(function() espData.distanceText:Remove() end) end
+        if espData.tracer then pcall(function() espData.tracer:Remove() end) end
+        espObjects[player] = nil
     end
 end)
 
