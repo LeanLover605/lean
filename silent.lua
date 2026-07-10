@@ -51,7 +51,7 @@ local config = {
     showFOV = true,
     fovColor = Color3.fromRGB(255, 255, 255),
     fovTransparency = 0.7,
-    toggleKey = "F",
+    toggleKey = "Delete",
     guikey = "RightShift",
     smoothing = 0.3,
     wallCheck = false,
@@ -106,7 +106,10 @@ local guiElements = {}
 local hitRemote = nil
 local remoteConnection = nil
 local remoteSearching = false
-local isUILoaded = false -- Flag to track if UI is ready
+local isUILoaded = false
+
+-- ===== UI SLIDER REFERENCE STORAGE =====
+local sliderElements = {}
 
 -- ===== ON HIT DETECTED =====
 local function onHitDetected(...)
@@ -126,6 +129,46 @@ local function onHitDetected(...)
     
     if config.adaptiveCalibration and autoCalc.totalShots >= 5 then
         performAdaptiveCalibration()
+    end
+end
+
+-- ===== UPDATE UI SLIDERS =====
+local function updateUISliders()
+    if not isUILoaded then return end
+    
+    -- Update Prediction slider
+    if sliderElements.predictionSlider then
+        pcall(function()
+            sliderElements.predictionSlider:Set(config.prediction)
+        end)
+    end
+    
+    -- Update Bullet Velocity slider
+    if sliderElements.velocitySlider then
+        pcall(function()
+            sliderElements.velocitySlider:Set(config.bulletVelocity)
+        end)
+    end
+    
+    -- Update Bullet Drop slider
+    if sliderElements.dropSlider then
+        pcall(function()
+            sliderElements.dropSlider:Set(config.bulletDrop)
+        end)
+    end
+    
+    -- Update Drop Compensation slider
+    if sliderElements.compensationSlider then
+        pcall(function()
+            sliderElements.compensationSlider:Set(config.gravityCompensation)
+        end)
+    end
+    
+    -- Update Calibration Target text
+    if guiElements.calibrationTargetText then
+        pcall(function()
+            guiElements.calibrationTargetText:SetDesc("Currently calibrating: " .. autoCalc.calibrationTarget)
+        end)
     end
 end
 
@@ -184,12 +227,8 @@ local function performAdaptiveCalibration(force)
         print("Adaptive calibration: " .. autoCalc.calibrationTarget .. " -> " .. string.format("%.3f", newValue))
         print("Current hit rate: " .. math.floor(hitRate * 100) .. "%")
         
-        -- Only update UI if it's loaded and the element exists
-        if isUILoaded and guiElements and guiElements.calibrationTargetText then
-            pcall(function()
-                guiElements.calibrationTargetText:SetDesc("Currently calibrating: " .. autoCalc.calibrationTarget)
-            end)
-        end
+        -- Update UI sliders with new values
+        updateUISliders()
     end
 end
 
@@ -393,6 +432,9 @@ local function performAutoCalibration()
         autoCalc.calibrationValues.prediction.current = config.prediction
         print("Auto-adjusted prediction to: " .. config.prediction)
     end
+    
+    -- Update all UI sliders with new values
+    updateUISliders()
 end
 
 -- ===== CREATE FOV CIRCLE =====
@@ -867,7 +909,7 @@ PredictionTab:Toggle({
     end
 })
 
-PredictionTab:Slider({
+local predictionSlider = PredictionTab:Slider({
     Title = "Prediction Multiplier",
     Desc = "How much to lead moving targets (higher = more lead)",
     Step = 0.05,
@@ -881,8 +923,9 @@ PredictionTab:Slider({
         autoCalc.calibrationValues.prediction.current = value
     end
 })
+sliderElements.predictionSlider = predictionSlider
 
-PredictionTab:Slider({
+local velocitySlider = PredictionTab:Slider({
     Title = "Bullet Velocity",
     Desc = "Bullet speed in studs/second",
     Step = 10,
@@ -896,8 +939,9 @@ PredictionTab:Slider({
         autoCalc.calibrationValues.bulletVelocity.current = value
     end
 })
+sliderElements.velocitySlider = velocitySlider
 
-PredictionTab:Slider({
+local dropSlider = PredictionTab:Slider({
     Title = "Bullet Drop",
     Desc = "Bullet drop (gravity) in studs/s²",
     Step = 1,
@@ -911,8 +955,9 @@ PredictionTab:Slider({
         autoCalc.calibrationValues.bulletDrop.current = value
     end
 })
+sliderElements.dropSlider = dropSlider
 
-PredictionTab:Slider({
+local compensationSlider = PredictionTab:Slider({
     Title = "Drop Compensation",
     Desc = "Multiplier for bullet drop compensation",
     Step = 0.05,
@@ -926,6 +971,7 @@ PredictionTab:Slider({
         autoCalc.calibrationValues.gravityCompensation.current = value
     end
 })
+sliderElements.compensationSlider = compensationSlider
 
 -- ===== CALIBRATION TAB =====
 CalibrationTab:Toggle({
