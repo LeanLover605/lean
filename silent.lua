@@ -92,7 +92,7 @@ local config = {
     bulletVelocity = WEAPON_SETTINGS.Velocity,
     bulletDrop = 5,
     autoPrediction = true,
-    autoBulletDrop = true, -- NEW: Auto bullet drop calculation
+    autoBulletDrop = true,
     gravityCompensation = 1.5,
     longRangeCompensation = 1.5,
     mountedLeadMultiplier = 2.0,
@@ -112,6 +112,7 @@ local config = {
     -- ESP Settings
     espEnabled = false,
     espTeamCheck = false,
+    espWallCheck = false, -- NEW: ESP wall check toggle
     espBoxEnabled = true,
     espHealthbarEnabled = true,
     espNameEnabled = true,
@@ -124,6 +125,8 @@ local config = {
     espTracerColor = Color3.fromRGB(255, 255, 255),
     espWallColor = Color3.fromRGB(128, 0, 255),
     espWallHue = 0.75,
+    espVisibleColor = Color3.fromRGB(0, 255, 128), -- Color when visible
+    espHiddenColor = Color3.fromRGB(255, 50, 50), -- Color when behind wall
 }
 
 -- ===== STATE =====
@@ -711,7 +714,7 @@ local function updateTargetVelocities()
     end
 end
 
--- ===== PREDICT POSITION (WITH AUTO BULLET DROP) =====
+-- ===== PREDICT POSITION =====
 local function predictPosition(targetPart, player)
     if not targetPart or not targetPart.Parent then
         return targetPart and targetPart.Position or Vector3.new(0, 0, 0)
@@ -725,7 +728,6 @@ local function predictPosition(targetPart, player)
     
     local bulletTravelTime = math.clamp(distance / bulletVelocity, 0.01, 5)
     
-    -- ===== MOVEMENT PREDICTION =====
     if config.autoPrediction and targetVelocities[player] then
         local velocity = targetVelocities[player]
         if velocity and velocity.Magnitude > 1 then
@@ -751,36 +753,24 @@ local function predictPosition(targetPart, player)
         end
     end
     
-    -- ===== BULLET DROP COMPENSATION =====
     local drop = 0
     if config.bulletDrop > 0 then
         local predDist = (basePosition - cameraPos).Magnitude
         local travelTime = math.clamp(predDist / bulletVelocity, 0.01, 5)
         
-        -- Calculate drop using physics formula: d = 0.5 * g * t^2
         drop = 0.5 * config.bulletDrop * travelTime * travelTime
-        
-        -- Apply gravity compensation multiplier
         drop = drop * config.gravityCompensation
         
-        -- Auto bullet drop calculation
         if config.autoBulletDrop then
-            -- Use the actual distance to calculate the required compensation
-            -- The bullet drop value is gravitational acceleration
             local actualDrop = 0.5 * config.bulletDrop * (distance / bulletVelocity)^2
             
-            -- Adjust drop to compensate for the actual drop
-            -- If the predicted position is lower than the target, aim higher
             local heightDiff = basePosition.Y - cameraPos.Y
             if heightDiff > 0 then
-                -- Target is above us, need more compensation
                 drop = drop * (1 + math.min(heightDiff / 50, 2))
             elseif heightDiff < -20 then
-                -- Target is below us, less compensation
                 drop = drop * (1 + math.max(heightDiff / 100, -0.5))
             end
             
-            -- Long range compensation
             if predDist > 300 then
                 local longRangeMultiplier = 1 + (predDist - 300) / 500
                 drop = drop * math.min(longRangeMultiplier, 3)
@@ -788,7 +778,6 @@ local function predictPosition(targetPart, player)
         end
     end
     
-    -- Apply drop compensation (aim higher than target)
     basePosition = basePosition + Vector3.new(0, drop, 0)
     
     return basePosition
@@ -874,15 +863,85 @@ local function onRenderStepped()
 end
 
 -- ===== ESP FUNCTIONS (Using esp-lib.lua) =====
+local function isPlayerBehindWall(player)
+    if not player or not player.Character then return false end
+    
+    local targetPart = getTargetPart(player)
+    if not targetPart then return false end
+    
+    local origin = Camera.CFrame.Position
+    local direction = (targetPart.Position - origin).Unit
+    local distance = (targetPart.Position - origin).Magnitude
+    
+    local rayParams = RaycastParams.new()
+    rayParams.FilterDescendantsInstances = {plr.Character}
+    rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+    rayParams.IgnoreWater = true
+    
+    local result = Workspace:Raycast(origin, direction * distance, rayParams)
+    
+    if result and result.Instance then
+        -- Check if the hit is on the target player
+        local hitPlayer = getPlayerFromPart(result.Instance)
+        if hitPlayer == player then
+            return false
+        end
+        
+        -- Check if the hit is part of the player's character
+        local character = result.Instance.Parent
+        while character do
+            if character == player.Character then
+                return false
+            end
+            character = character.Parent
+        end
+        
+        return true
+    end
+    
+    return false
+end
+
+local function getTeamColor(player)
+    if player.Team then
+        return player.Team.TeamColor.Color
+    end
+    return Color3.fromRGB(255, 255, 255)
+end
+
 local function updateESPColors()
     local espSettings = getgenv().esplib
     if not espSettings then return end
     
+    -- These are the base colors that will be used when wall check is off
     espSettings.box.fill = config.espBoxColor
     espSettings.healthbar.fill = config.espHealthColor
     espSettings.name.fill = config.espNameColor
     espSettings.distance.fill = config.espDistanceColor
     espSettings.tracer.fill = config.espTracerColor
+end
+
+local function getESPColorForPlayer(player)
+    if not player then return config.espBoxColor
+    
+    local isBehindWall = false
+    if config.espWallCheck then
+        isBehindWall = isPlayerBehindWall(player)
+    end
+    
+    if config.espWallCheck and isBehindWall then
+        -- Player is behind wall, use wall color
+        if config.espUseTeamColor then
+            local teamColor = getTeamColor(player)
+            local h, s, v = Color3.toHSV(teamColor)
+            return Color3.fromHSV(config.espWallHue or 0.75, s, v)
+        else
+            return config.espWallColor
+        end
+    else
+        -- Player is visible or wall check is off
+        return config.espBoxColor
+    end
 end
 
 local function refreshESPForPlayer(player)
@@ -914,6 +973,19 @@ local function setupESPForPlayer(player)
     
     updateESPColors()
     
+    -- Get the appropriate color for this player
+    local playerColor = getESPColorForPlayer(player)
+    
+    -- Temporarily override esp-lib colors for this player
+    local espSettings = getgenv().esplib
+    local originalBoxColor = espSettings.box.fill
+    local originalNameColor = espSettings.name.fill
+    local originalDistColor = espSettings.distance.fill
+    
+    espSettings.box.fill = playerColor
+    espSettings.name.fill = playerColor
+    espSettings.distance.fill = playerColor
+    
     if config.espBoxEnabled then
         esplib.add_box(character)
     end
@@ -930,6 +1002,11 @@ local function setupESPForPlayer(player)
         esplib.add_tracer(character)
     end
     
+    -- Restore original colors
+    espSettings.box.fill = originalBoxColor
+    espSettings.name.fill = originalNameColor
+    espSettings.distance.fill = originalDistColor
+    
     espEnabledPlayers[player] = true
     
     if not espObjects[player] then
@@ -941,6 +1018,11 @@ local function setupESPForPlayer(player)
             task.wait(0.5)
             if shouldShowESP() then
                 updateESPColors()
+                local newColor = getESPColorForPlayer(player)
+                espSettings.box.fill = newColor
+                espSettings.name.fill = newColor
+                espSettings.distance.fill = newColor
+                
                 if config.espBoxEnabled then
                     esplib.add_box(newCharacter)
                 end
@@ -956,6 +1038,10 @@ local function setupESPForPlayer(player)
                 if config.espTracerEnabled then
                     esplib.add_tracer(newCharacter)
                 end
+                
+                espSettings.box.fill = originalBoxColor
+                espSettings.name.fill = originalNameColor
+                espSettings.distance.fill = originalDistColor
             end
         end)
     end
@@ -978,6 +1064,7 @@ end
 local function updateAllESP()
     updateESPColors()
     
+    -- Remove ESP for players that no longer exist or are dead
     for player, _ in pairs(espEnabledPlayers) do
         if not player or not player.Parent or player == plr then
             removeESPForPlayer(player)
@@ -1001,6 +1088,7 @@ local function updateAllESP()
         end
     end
     
+    -- Add ESP for eligible players
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= plr and player.Character and player.Character.Parent then
             if config.espTeamCheck and player.Team == plr.Team then
@@ -1230,6 +1318,23 @@ ESPGroup:AddToggle("ESPTeamCheck", {
     end
 })
 
+-- NEW: ESP Wall Check Toggle
+ESPGroup:AddToggle("ESPWallCheck", {
+    Text = "Wall Check",
+    Desc = "Change ESP colors when players are behind walls",
+    Default = config.espWallCheck,
+    Callback = function(v)
+        config.espWallCheck = v
+        if config.espEnabled then
+            for player, _ in pairs(espEnabledPlayers) do
+                removeESPForPlayer(player)
+            end
+            espEnabledPlayers = {}
+            updateAllESP()
+        end
+    end
+})
+
 ESPGroup:AddDivider()
 ESPGroup:AddLabel("ESP Elements")
 
@@ -1315,6 +1420,40 @@ ESPGroup:AddToggle("ESPTracerEnabled", {
 
 ESPGroup:AddDivider()
 ESPGroup:AddLabel("Colors")
+
+-- Color pickers for visible and hidden states
+local visibleColorLabel = ESPGroup:AddLabel("Visible Color")
+visibleColorLabel:AddColorPicker("ESPVisibleColor", {
+    Default = config.espVisibleColor,
+    Callback = function(v)
+        config.espVisibleColor = v
+        if config.espEnabled then
+            for player, _ in pairs(espEnabledPlayers) do
+                removeESPForPlayer(player)
+            end
+            espEnabledPlayers = {}
+            updateAllESP()
+        end
+    end
+})
+
+local hiddenColorLabel = ESPGroup:AddLabel("Hidden/Wall Color")
+hiddenColorLabel:AddColorPicker("ESPHiddenColor", {
+    Default = config.espHiddenColor,
+    Callback = function(v)
+        config.espHiddenColor = v
+        if config.espEnabled then
+            for player, _ in pairs(espEnabledPlayers) do
+                removeESPForPlayer(player)
+            end
+            espEnabledPlayers = {}
+            updateAllESP()
+        end
+    end
+})
+
+ESPGroup:AddDivider()
+ESPGroup:AddLabel("Individual Element Colors (Override)")
 
 local boxColorLabel = ESPGroup:AddLabel("Box Color")
 boxColorLabel:AddColorPicker("ESPBoxColor", {
