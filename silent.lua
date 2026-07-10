@@ -1,3 +1,4 @@
+-- ===== WINDUI LOADING =====
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 
 -- ===== SERVICES =====
@@ -157,7 +158,6 @@ function setChantPackage(packageName)
     if not plr then return end
     if not packageName then return end
     
-    -- Find the ChantPackage value in the player
     local chantValue = plr:FindFirstChild("ChantPackage")
     if not chantValue and plr.Character then
         chantValue = plr.Character:FindFirstChild("ChantPackage")
@@ -170,7 +170,6 @@ function setChantPackage(packageName)
             print("Chant package changed to: " .. packageName)
         end)
     else
-        -- Try to create it if it doesn't exist
         local newChantValue = Instance.new("StringValue")
         newChantValue.Name = "ChantPackage"
         newChantValue.Value = packageName
@@ -214,14 +213,12 @@ end
 local function getPlayerFromPart(part)
     if not part then return nil end
     
-    -- Check if part is a hitbox
     for player, data in pairs(playerHitboxes) do
         if data.hitbox == part then
             return player
         end
     end
     
-    -- Check if part is in a character
     local character = part.Parent
     while character do
         if character:IsA("Model") and character:FindFirstChildOfClass("Humanoid") then
@@ -1884,7 +1881,6 @@ connections.characterAdded = plr.CharacterAdded:Connect(function(character)
         performAutoCalibration()
     end
     
-    -- Check for ChantPackage after character respawn
     task.wait(0.5)
     local chantValue = character:FindFirstChild("ChantPackage")
     if chantValue then
