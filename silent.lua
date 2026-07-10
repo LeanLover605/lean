@@ -77,40 +77,6 @@ local Stats = game:GetService("Stats")
 
 local plr = Players.LocalPlayer
 
--- ===== DEFAULT CONFIGURATION =====
-local config = {
-    enabled = false,
-    fovRadius = 150,
-    teamCheck = false,
-    aimPart = "Head",
-    showFOV = true,
-    fovColor = Color3.fromRGB(255, 255, 255),
-    fovTransparency = 0.7,
-    toggleKey = "Delete",
-    guikey = "RightShift",
-    smoothing = 0.3,
-    wallCheck = false,
-    prediction = 0.15,
-    bulletVelocity = 500,
-    bulletDrop = 5,
-    autoPrediction = true,
-    gravityCompensation = 1.0,
-    autoCalibration = true,
-    adaptiveCalibration = true,
-    calibrationRate = 0.05,
-    
-    -- Hitbox Extender settings
-    hitboxEnabled = false,
-    hitboxSize = 1.5,
-    hitboxColor = Color3.fromRGB(255, 0, 0),
-    hitboxTransparency = 0.5,
-    hitboxTeamCheck = false,
-    hitboxPart = "Head",
-    
-    -- Chant Changer settings
-    chantPackage = "English", -- Default chant package
-}
-
 -- ===== CHANT PACKAGE LIST =====
 local chantPackages = {
     "American",
@@ -142,6 +108,40 @@ local chantPackages = {
     "Swedish",
     "Swiss",
     "Zulu"
+}
+
+-- ===== DEFAULT CONFIGURATION =====
+local config = {
+    enabled = false,
+    fovRadius = 150,
+    teamCheck = false,
+    aimPart = "Head",
+    showFOV = true,
+    fovColor = Color3.fromRGB(255, 255, 255),
+    fovTransparency = 0.7,
+    toggleKey = "Delete",
+    guikey = "RightShift",
+    smoothing = 0.3,
+    wallCheck = false,
+    prediction = 0.15,
+    bulletVelocity = 500,
+    bulletDrop = 5,
+    autoPrediction = true,
+    gravityCompensation = 1.0,
+    autoCalibration = true,
+    adaptiveCalibration = true,
+    calibrationRate = 0.05,
+    
+    -- Hitbox Extender settings
+    hitboxEnabled = false,
+    hitboxSize = 1.5,
+    hitboxColor = Color3.fromRGB(255, 0, 0),
+    hitboxTransparency = 0.5,
+    hitboxTeamCheck = false,
+    hitboxPart = "Head",
+    
+    -- Chant Changer settings
+    chantPackage = "English",
 }
 
 -- ===== AUTO-CALCULATION SYSTEM =====
@@ -223,14 +223,12 @@ local setChantPackage
 -- ===== CHANT CHANGER FUNCTIONS =====
 function setChantPackage(packageName)
     if not plr then return end
+    if not packageName then return end
     
     -- Find the ChantPackage value in the player
     local chantValue = plr:FindFirstChild("ChantPackage")
-    if not chantValue then
-        -- Try to find it in the player's character
-        if plr.Character then
-            chantValue = plr.Character:FindFirstChild("ChantPackage")
-        end
+    if not chantValue and plr.Character then
+        chantValue = plr.Character:FindFirstChild("ChantPackage")
     end
     
     if chantValue then
@@ -240,13 +238,11 @@ function setChantPackage(packageName)
             print("Chant package changed to: " .. packageName)
         end)
     else
-        warn("ChantPackage not found! Creating one...")
         -- Try to create it if it doesn't exist
         local newChantValue = Instance.new("StringValue")
         newChantValue.Name = "ChantPackage"
         newChantValue.Value = packageName
         
-        -- Parent it to the player or their character
         if plr.Character then
             newChantValue.Parent = plr.Character
         else
@@ -319,9 +315,9 @@ function fireHitRemote(targetPlayer, hitVelocity)
     
     pcall(function()
         hitRemote:FireServer(
-            plr,           -- [1] Shooter
-            hitVelocity,   -- [2] Vector3 velocity at impact
-            humanoid       -- [3] Target's Humanoid
+            plr,
+            hitVelocity,
+            humanoid
         )
         print("Fired Hit remote for: " .. targetPlayer.Name .. " with velocity: " .. tostring(hitVelocity))
     end)
@@ -333,7 +329,6 @@ function hookFastCastRedux()
     
     print("Attempting to hook FastCastRedux...")
     
-    -- Get the FastCastRedux module
     local fastCastModule = ReplicatedStorage:FindFirstChild("Tools")
     if fastCastModule then
         local components = fastCastModule:FindFirstChild("Components")
@@ -344,20 +339,16 @@ function hookFastCastRedux()
                 if fastCast then
                     print("Found FastCastRedux module!")
                     
-                    -- Try to get the actual FastCast instance
                     local fastCastInstance = nil
                     
-                    -- Method 1: Check if it's already initialized
                     if fastCast.__index and fastCast.__index.RayHit then
                         fastCastInstance = fastCast
                     end
                     
-                    -- Method 2: Check for a global FastCast instance
                     if not fastCastInstance and _G.FastCast then
                         fastCastInstance = _G.FastCast
                     end
                     
-                    -- Method 3: Search workspace for FastCast objects
                     if not fastCastInstance then
                         for _, obj in ipairs(Workspace:GetDescendants()) do
                             if obj:IsA("ModuleScript") and obj.Name == "FastCastRedux" then
@@ -375,25 +366,16 @@ function hookFastCastRedux()
                     if fastCastInstance and fastCastInstance.RayHit then
                         print("Hooking FastCastRedux RayHit event...")
                         
-                        -- Hook the RayHit event
                         local oldRayHit = fastCastInstance.RayHit
                         fastCastInstance.RayHit = function(cast, result, velocity, cosmeticBullet)
-                            -- Check if the hit part is our extended hitbox
                             local hitPart = result and result.Instance
                             local hitPlayer = getPlayerFromPart(hitPart)
                             
                             if hitPlayer and playerHitboxes[hitPlayer] then
                                 print("FastCast hit extended hitbox: " .. hitPlayer.Name)
-                                
-                                -- Get the real target part
-                                local realTargetPart = playerHitboxes[hitPlayer].targetPart
-                                if realTargetPart then
-                                    -- Fire the Hit remote with the velocity
-                                    fireHitRemote(hitPlayer, velocity)
-                                end
+                                fireHitRemote(hitPlayer, velocity)
                             end
                             
-                            -- Call the original event
                             if oldRayHit then
                                 return oldRayHit(cast, result, velocity, cosmeticBullet)
                             end
@@ -403,46 +385,8 @@ function hookFastCastRedux()
                         print("FastCastRedux hooked successfully!")
                         return true
                     else
-                        print("Could not find FastCastRedux instance. Trying alternative method...")
-                        
-                        -- Alternative: Hook the module's new function
-                        local success, result = pcall(function()
-                            return require(fastCast)
-                        end)
-                        
-                        if success and result and result.new then
-                            local oldNew = result.new
-                            result.new = function(...)
-                                local instance = oldNew(...)
-                                
-                                -- Hook the instance's events
-                                if instance and instance.RayHit then
-                                    local oldInstanceRayHit = instance.RayHit
-                                    instance.RayHit = function(cast, result, velocity, cosmeticBullet)
-                                        local hitPart = result and result.Instance
-                                        local hitPlayer = getPlayerFromPart(hitPart)
-                                        
-                                        if hitPlayer and playerHitboxes[hitPlayer] then
-                                            print("FastCast instance hit extended hitbox: " .. hitPlayer.Name)
-                                            fireHitRemote(hitPlayer, velocity)
-                                        end
-                                        
-                                        if oldInstanceRayHit then
-                                            return oldInstanceRayHit(cast, result, velocity, cosmeticBullet)
-                                        end
-                                    end
-                                end
-                                
-                                return instance
-                            end
-                            
-                            fastCastHooked = true
-                            print("FastCastRedux new() hooked successfully!")
-                            return true
-                        end
+                        print("Could not find FastCastRedux instance.")
                     end
-                else
-                    print("FastCastRedux not found at expected location.")
                 end
             end
         end
@@ -463,25 +407,18 @@ function hookHitRemote()
         if not hitRemote then return false end
     end
     
-    -- Store original FireServer
     originalFireServer = hitRemote.FireServer
     
-    -- Hook the FireServer method
     hitRemote.FireServer = function(self, ...)
         local args = {...}
-        local shooter = args[1]
-        local velocity = args[2]
         local targetHumanoid = args[3]
         
-        -- Check if this is a hit on our extended hitbox
         local targetPlayer = targetHumanoid and targetHumanoid.Parent and Players:GetPlayerFromCharacter(targetHumanoid.Parent)
         
         if targetPlayer and playerHitboxes[targetPlayer] then
             print("Hit remote detected hit on extended hitbox: " .. targetPlayer.Name)
-            -- Let the original remote fire normally
         end
         
-        -- Call original
         if originalFireServer then
             return originalFireServer(self, ...)
         end
@@ -511,7 +448,6 @@ function createHitboxForPlayer(player)
     hitbox.Material = Enum.Material.Neon
     hitbox.Size = targetPart.Size * config.hitboxSize
     
-    -- Weld to target part
     local weld = Instance.new("Weld")
     weld.Part0 = targetPart
     weld.Part1 = hitbox
@@ -527,7 +463,6 @@ function createHitboxForPlayer(player)
         connection = nil
     }
     
-    -- Touch detection (for visual feedback only, since raycasts don't trigger Touched)
     playerHitboxes[player].connection = hitbox.Touched:Connect(function(hit)
         if hit and hit.Parent then
             local isBullet = hit.Name:match("Bullet") or hit.Name:match("Projectile")
@@ -594,7 +529,6 @@ end
 cleanup = function()
     print("Cleaning up Silent Aim script...")
     
-    -- Restore original Hit remote
     if originalFireServer and hitRemote then
         pcall(function()
             hitRemote.FireServer = originalFireServer
@@ -1128,7 +1062,7 @@ local function updateTargetVelocities()
     end
 end
 
--- ===== PREDICT TARGET POSITION (OPTIMIZED FOR FASTCASTREDUX) =====
+-- ===== PREDICT TARGET POSITION =====
 local function predictPosition(targetPart, player)
     if not targetPart or not targetPart.Parent then 
         return targetPart and targetPart.Position or Vector3.new(0, 0, 0)
@@ -1137,46 +1071,33 @@ local function predictPosition(targetPart, player)
     local basePosition = targetPart.Position
     local cameraPos = Camera.CFrame.Position
     
-    -- FastCastRedux uses velocity-based hit detection
-    -- The raycast fires with a velocity vector, so we need to predict where the target will be
-    -- when the ray reaches them
     local pingCompensation = autoCalc.ping or 0.05
     
     local distance = (basePosition - cameraPos).Magnitude
     local bulletTravelTime = math.clamp(distance / config.bulletVelocity, 0.01, 3)
     
-    -- Movement prediction (for FastCastRedux velocity-based system)
     if config.autoPrediction and targetVelocities[player] then
         local velocity = targetVelocities[player]
         local velocityMagnitude = velocity.Magnitude
         
         if velocityMagnitude > 1 then
-            -- FastCastRedux uses velocity in its RayHit event
-            -- We need to predict where the target will be when the ray arrives
-            -- The lead time should account for both bullet travel time and ping
             local leadTime = bulletTravelTime * config.prediction + pingCompensation
             
-            -- For faster moving targets, increase lead time
             local speedMultiplier = math.min(velocityMagnitude / 30, 2)
             leadTime = leadTime * (1 + speedMultiplier * 0.3)
             
-            -- Apply prediction to base position
             basePosition = basePosition + (velocity * leadTime)
         end
     end
     
-    -- Bullet drop compensation (FastCastRedux handles gravity via Acceleration in the behavior)
-    -- We still compensate here for the aim direction
     if config.bulletDrop > 0 then
         local predictedDistance = (basePosition - cameraPos).Magnitude
         local travelTime = math.clamp(predictedDistance / config.bulletVelocity, 0.01, 3)
         
-        -- Calculate drop using physics formula: d = 0.5 * g * t^2
         local drop = 0.5 * config.bulletDrop * travelTime * travelTime
         drop = drop * config.gravityCompensation
         drop = drop * (1 + pingCompensation * 0.5)
         
-        -- Apply drop compensation (aim higher than target)
         basePosition = basePosition + Vector3.new(0, drop, 0)
     end
     
@@ -1259,7 +1180,7 @@ local function getClosestTarget()
     return closestTarget, closestPlayer
 end
 
--- ===== SILENT AIM (OPTIMIZED FOR FASTCASTREDUX) =====
+-- ===== SILENT AIM =====
 local function onRenderStepped()
     updateFOVPosition()
     
@@ -1269,7 +1190,6 @@ local function onRenderStepped()
         detectPing()
     end
     
-    -- Track mouse clicks for shot attempts
     if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
         trackShotAttempt()
     end
@@ -1280,10 +1200,6 @@ local function onRenderStepped()
         local predictedPos = predictPosition(target, player)
         local cameraPos = Camera.CFrame.Position
         local direction = (predictedPos - cameraPos).Unit
-        
-        -- FastCastRedux uses velocity-based hit detection
-        -- The direction we aim should be towards the predicted position
-        -- The velocity will be calculated by FastCastRedux based on our aim direction and bullet speed
         
         if config.smoothing < 0.95 then
             local currentLook = Camera.CFrame.LookVector
@@ -1560,7 +1476,7 @@ sliderElements.predictionSlider = predictionSlider
 
 local velocitySlider = PredictionTab:Slider({
     Title = "Bullet Velocity",
-    Desc = "Bullet speed in studs/second (used for FastCastRedux prediction)",
+    Desc = "Bullet speed in studs/second",
     Step = 10,
     Value = {
         Min = 100,
@@ -1576,7 +1492,7 @@ sliderElements.velocitySlider = velocitySlider
 
 local dropSlider = PredictionTab:Slider({
     Title = "Bullet Drop",
-    Desc = "Bullet drop (gravity) in studs/s² (used for FastCastRedux prediction)",
+    Desc = "Bullet drop (gravity) in studs/s²",
     Step = 1,
     Value = {
         Min = 0,
@@ -1758,7 +1674,7 @@ HitboxTab:Paragraph({
 
 HitboxTab:Paragraph({
     Title = "FastCastRedux Note",
-    Desc = "FastCastRedux uses raycasts with velocity-based hit detection. The Hit remote expects velocity as the second argument, which matches FastCastRedux's RayHit event."
+    Desc = "FastCastRedux uses raycasts with velocity-based hit detection. The Hit remote expects velocity as the second argument."
 })
 
 -- ===== CHANT CHANGER TAB =====
@@ -1985,22 +1901,22 @@ updateToggleKeybind()
 
 -- Initialize chant package on load
 task.wait(1)
-local chantValue = plr:FindFirstChild("ChantPackage")
-if chantValue then
-    config.chantPackage = chantValue.Value
-    print("Current chant package: " .. config.chantPackage)
-else
-    -- Try to find it in the character
-    if plr.Character then
+local function initChantPackage()
+    if not plr then return end
+    
+    local chantValue = plr:FindFirstChild("ChantPackage")
+    if not chantValue and plr.Character then
         chantValue = plr.Character:FindFirstChild("ChantPackage")
-        if chantValue then
-            config.chantPackage = chantValue.Value
-            print("Current chant package (from character): " .. config.chantPackage)
-        else
-            print("No ChantPackage found. Use the Chant Changer to set one.")
-        end
+    end
+    
+    if chantValue then
+        config.chantPackage = chantValue.Value
+        print("Current chant package: " .. config.chantPackage)
+    else
+        print("No ChantPackage found. Use the Chant Changer to set one.")
     end
 end
+initChantPackage()
 
 task.wait(1)
 local remoteFound = setupHitRemoteListener()
@@ -2042,12 +1958,6 @@ connections.characterAdded = plr.CharacterAdded:Connect(function(character)
     if chantValue then
         config.chantPackage = chantValue.Value
         print("Chant package after respawn: " .. config.chantPackage)
-        -- Update UI if loaded
-        if isUILoaded and guiElements.chantPackageDropdown then
-            pcall(function()
-                guiElements.chantPackageDropdown:Set(config.chantPackage)
-            end)
-        end
     end
 end)
 
