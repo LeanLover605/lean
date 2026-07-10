@@ -94,71 +94,18 @@ local autoCalc = {
     remoteName = nil,
 }
 
--- ===== INTERCEPT HIT REMOTE =====
+-- ===== STATE =====
+local toggleKeyConnection = nil
+local fovCircle = nil
+local lastTargetPos = {}
+local targetVelocities = {}
+local currentTarget = nil
+local currentTargetPlayer = nil
+local enabledToggleElement = nil
+local guiElements = {}
 local hitRemote = nil
 local remoteConnection = nil
 local remoteSearching = false
-
-local function setupHitRemoteListener()
-    if remoteSearching then return false end
-    remoteSearching = true
-    
-    print("Looking for Hit remote at: ReplicatedStorage.Tools.Components.Muzzle.Hit")
-    
-    -- Try the specific path first
-    local tools = ReplicatedStorage:FindFirstChild("Tools")
-    if tools then
-        local components = tools:FindFirstChild("Components")
-        if components then
-            local muzzle = components:FindFirstChild("Muzzle")
-            if muzzle then
-                hitRemote = muzzle:FindFirstChild("Hit")
-                if hitRemote then
-                    print("Found Hit remote at the expected location!")
-                    autoCalc.remoteFound = true
-                    autoCalc.remoteName = hitRemote.Name
-                    autoCalc.remotePath = "ReplicatedStorage.Tools.Components.Muzzle.Hit"
-                    autoCalc.remoteType = hitRemote:IsA("RemoteEvent") and "RemoteEvent" or "RemoteFunction"
-                    
-                    -- Setup listener based on remote type
-                    if hitRemote:IsA("RemoteEvent") then
-                        if remoteConnection then
-                            remoteConnection:Disconnect()
-                        end
-                        remoteConnection = hitRemote.OnClientEvent:Connect(function(...)
-                            onHitDetected(...)
-                        end)
-                        print("Connected to Hit RemoteEvent!")
-                        remoteSearching = false
-                        return true
-                    elseif hitRemote:IsA("RemoteFunction") then
-                        local oldInvoke = hitRemote.OnClientInvoke
-                        hitRemote.OnClientInvoke = function(...)
-                            onHitDetected(...)
-                            if oldInvoke then
-                                return oldInvoke(...)
-                            end
-                        end
-                        print("Connected to Hit RemoteFunction!")
-                        remoteSearching = false
-                        return true
-                    end
-                else
-                    print("Hit remote not found in Muzzle.")
-                end
-            else
-                print("Muzzle folder not found.")
-            end
-        else
-            print("Components folder not found.")
-        end
-    else
-        print("Tools folder not found.")
-    end
-    
-    remoteSearching = false
-    return false
-end
 
 -- ===== ON HIT DETECTED =====
 local function onHitDetected(...)
@@ -178,26 +125,6 @@ local function onHitDetected(...)
     
     if config.adaptiveCalibration and autoCalc.totalShots >= 5 then
         performAdaptiveCalibration()
-    end
-end
-
--- ===== TRACK SHOT ATTEMPTS =====
-local function trackShotAttempt()
-    local currentTime = tick()
-    if currentTime - autoCalc.lastShotTime > autoCalc.shotCooldown then
-        autoCalc.totalShots = autoCalc.totalShots + 1
-        autoCalc.lastShotTime = currentTime
-        
-        -- Update UI
-        if guiElements and guiElements.hitRateText then
-            pcall(function()
-                guiElements.hitRateText:SetDesc("Current hit rate: " .. math.floor(autoCalc.hitRate * 100) .. "% (" .. autoCalc.totalHits .. "/" .. autoCalc.totalShots .. ")")
-            end)
-        end
-        
-        if autoCalc.totalShots - autoCalc.totalHits > 10 then
-            performAdaptiveCalibration(true)
-        end
     end
 end
 
@@ -261,6 +188,88 @@ local function performAdaptiveCalibration(force)
             pcall(function()
                 guiElements.calibrationTargetText:SetDesc("Currently calibrating: " .. autoCalc.calibrationTarget)
             end)
+        end
+    end
+end
+
+-- ===== INTERCEPT HIT REMOTE =====
+local function setupHitRemoteListener()
+    if remoteSearching then return false end
+    remoteSearching = true
+    
+    print("Looking for Hit remote at: ReplicatedStorage.Tools.Components.Muzzle.Hit")
+    
+    -- Try the specific path first
+    local tools = ReplicatedStorage:FindFirstChild("Tools")
+    if tools then
+        local components = tools:FindFirstChild("Components")
+        if components then
+            local muzzle = components:FindFirstChild("Muzzle")
+            if muzzle then
+                hitRemote = muzzle:FindFirstChild("Hit")
+                if hitRemote then
+                    print("Found Hit remote at the expected location!")
+                    autoCalc.remoteFound = true
+                    autoCalc.remoteName = hitRemote.Name
+                    autoCalc.remotePath = "ReplicatedStorage.Tools.Components.Muzzle.Hit"
+                    autoCalc.remoteType = hitRemote:IsA("RemoteEvent") and "RemoteEvent" or "RemoteFunction"
+                    
+                    -- Setup listener based on remote type
+                    if hitRemote:IsA("RemoteEvent") then
+                        if remoteConnection then
+                            remoteConnection:Disconnect()
+                        end
+                        remoteConnection = hitRemote.OnClientEvent:Connect(function(...)
+                            onHitDetected(...)
+                        end)
+                        print("Connected to Hit RemoteEvent!")
+                        remoteSearching = false
+                        return true
+                    elseif hitRemote:IsA("RemoteFunction") then
+                        local oldInvoke = hitRemote.OnClientInvoke
+                        hitRemote.OnClientInvoke = function(...)
+                            onHitDetected(...)
+                            if oldInvoke then
+                                return oldInvoke(...)
+                            end
+                        end
+                        print("Connected to Hit RemoteFunction!")
+                        remoteSearching = false
+                        return true
+                    end
+                else
+                    print("Hit remote not found in Muzzle.")
+                end
+            else
+                print("Muzzle folder not found.")
+            end
+        else
+            print("Components folder not found.")
+        end
+    else
+        print("Tools folder not found.")
+    end
+    
+    remoteSearching = false
+    return false
+end
+
+-- ===== TRACK SHOT ATTEMPTS =====
+local function trackShotAttempt()
+    local currentTime = tick()
+    if currentTime - autoCalc.lastShotTime > autoCalc.shotCooldown then
+        autoCalc.totalShots = autoCalc.totalShots + 1
+        autoCalc.lastShotTime = currentTime
+        
+        -- Update UI
+        if guiElements and guiElements.hitRateText then
+            pcall(function()
+                guiElements.hitRateText:SetDesc("Current hit rate: " .. math.floor(autoCalc.hitRate * 100) .. "% (" .. autoCalc.totalHits .. "/" .. autoCalc.totalShots .. ")")
+            end)
+        end
+        
+        if autoCalc.totalShots - autoCalc.totalHits > 10 then
+            performAdaptiveCalibration(true)
         end
     end
 end
@@ -384,16 +393,6 @@ local function performAutoCalibration()
         print("Auto-adjusted prediction to: " .. config.prediction)
     end
 end
-
--- ===== STATE =====
-local toggleKeyConnection = nil
-local fovCircle = nil
-local lastTargetPos = {}
-local targetVelocities = {}
-local currentTarget = nil
-local currentTargetPlayer = nil
-local enabledToggleElement = nil
-local guiElements = {}
 
 -- ===== CREATE FOV CIRCLE =====
 local function createFOVCircle()
@@ -1108,7 +1107,7 @@ if not remoteFound then
     end)
 end
 
--- Run initial calibration
+-- Run initial calibration AFTER UI is created
 task.wait(1)
 performAutoCalibration()
 
