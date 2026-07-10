@@ -420,11 +420,9 @@ function createHitboxForPlayer(player)
     -- Touch detection (for visual feedback only, since raycasts don't trigger Touched)
     playerHitboxes[player].connection = hitbox.Touched:Connect(function(hit)
         if hit and hit.Parent then
-            -- Check if a physical bullet hit (unlikely with FastCastRedux)
             local isBullet = hit.Name:match("Bullet") or hit.Name:match("Projectile")
             if isBullet then
                 print("Physical bullet touched extended hitbox: " .. player.Name)
-                -- Try to get velocity from bullet
                 local velocity = Vector3.new(0, 0, 0)
                 local velProp = hit:FindFirstChild("Velocity")
                 if velProp then
@@ -616,7 +614,9 @@ local function setupHitRemoteListener()
                             remoteConnection:Disconnect()
                         end
                         remoteConnection = hitRemote.OnClientEvent:Connect(function(...)
-                            onHitDetected(...)
+                            pcall(function()
+                                onHitDetected(...)
+                            end)
                         end)
                         print("Connected to Hit RemoteEvent!")
                         remoteSearching = false
@@ -624,7 +624,9 @@ local function setupHitRemoteListener()
                     elseif hitRemote:IsA("RemoteFunction") then
                         local oldInvoke = hitRemote.OnClientInvoke
                         hitRemote.OnClientInvoke = function(...)
-                            onHitDetected(...)
+                            pcall(function()
+                                onHitDetected(...)
+                            end)
                             if oldInvoke then
                                 return oldInvoke(...)
                             end
@@ -1016,7 +1018,7 @@ local function updateTargetVelocities()
     end
 end
 
--- ===== PREDICT TARGET POSITION =====
+-- ===== PREDICT TARGET POSITION (OPTIMIZED FOR FASTCASTREDUX) =====
 local function predictPosition(targetPart, player)
     if not targetPart or not targetPart.Parent then 
         return targetPart and targetPart.Position or Vector3.new(0, 0, 0)
@@ -1025,33 +1027,46 @@ local function predictPosition(targetPart, player)
     local basePosition = targetPart.Position
     local cameraPos = Camera.CFrame.Position
     
+    -- FastCastRedux uses velocity-based hit detection
+    -- The raycast fires with a velocity vector, so we need to predict where the target will be
+    -- when the ray reaches them
     local pingCompensation = autoCalc.ping or 0.05
     
     local distance = (basePosition - cameraPos).Magnitude
     local bulletTravelTime = math.clamp(distance / config.bulletVelocity, 0.01, 3)
     
+    -- Movement prediction (for FastCastRedux velocity-based system)
     if config.autoPrediction and targetVelocities[player] then
         local velocity = targetVelocities[player]
         local velocityMagnitude = velocity.Magnitude
         
         if velocityMagnitude > 1 then
+            -- FastCastRedux uses velocity in its RayHit event
+            -- We need to predict where the target will be when the ray arrives
+            -- The lead time should account for both bullet travel time and ping
             local leadTime = bulletTravelTime * config.prediction + pingCompensation
             
+            -- For faster moving targets, increase lead time
             local speedMultiplier = math.min(velocityMagnitude / 30, 2)
             leadTime = leadTime * (1 + speedMultiplier * 0.3)
             
+            -- Apply prediction to base position
             basePosition = basePosition + (velocity * leadTime)
         end
     end
     
+    -- Bullet drop compensation (FastCastRedux handles gravity via Acceleration in the behavior)
+    -- We still compensate here for the aim direction
     if config.bulletDrop > 0 then
         local predictedDistance = (basePosition - cameraPos).Magnitude
         local travelTime = math.clamp(predictedDistance / config.bulletVelocity, 0.01, 3)
         
+        -- Calculate drop using physics formula: d = 0.5 * g * t^2
         local drop = 0.5 * config.bulletDrop * travelTime * travelTime
         drop = drop * config.gravityCompensation
         drop = drop * (1 + pingCompensation * 0.5)
         
+        -- Apply drop compensation (aim higher than target)
         basePosition = basePosition + Vector3.new(0, drop, 0)
     end
     
@@ -1134,7 +1149,7 @@ local function getClosestTarget()
     return closestTarget, closestPlayer
 end
 
--- ===== SILENT AIM =====
+-- ===== SILENT AIM (OPTIMIZED FOR FASTCASTREDUX) =====
 local function onRenderStepped()
     updateFOVPosition()
     
@@ -1144,6 +1159,7 @@ local function onRenderStepped()
         detectPing()
     end
     
+    -- Track mouse clicks for shot attempts
     if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
         trackShotAttempt()
     end
@@ -1154,6 +1170,10 @@ local function onRenderStepped()
         local predictedPos = predictPosition(target, player)
         local cameraPos = Camera.CFrame.Position
         local direction = (predictedPos - cameraPos).Unit
+        
+        -- FastCastRedux uses velocity-based hit detection
+        -- The direction we aim should be towards the predicted position
+        -- The velocity will be calculated by FastCastRedux based on our aim direction and bullet speed
         
         if config.smoothing < 0.95 then
             local currentLook = Camera.CFrame.LookVector
@@ -1425,7 +1445,7 @@ sliderElements.predictionSlider = predictionSlider
 
 local velocitySlider = PredictionTab:Slider({
     Title = "Bullet Velocity",
-    Desc = "Bullet speed in studs/second",
+    Desc = "Bullet speed in studs/second (used for FastCastRedux prediction)",
     Step = 10,
     Value = {
         Min = 100,
@@ -1441,7 +1461,7 @@ sliderElements.velocitySlider = velocitySlider
 
 local dropSlider = PredictionTab:Slider({
     Title = "Bullet Drop",
-    Desc = "Bullet drop (gravity) in studs/s²",
+    Desc = "Bullet drop (gravity) in studs/s² (used for FastCastRedux prediction)",
     Step = 1,
     Value = {
         Min = 0,
@@ -1480,7 +1500,6 @@ local hitboxEnabled = HitboxTab:Toggle({
         config.hitboxEnabled = value
         if value then
             updateAllHitboxes()
-            -- Hook FastCastRedux when enabling
             hookFastCastRedux()
             hookHitRemote()
         else
@@ -1493,11 +1512,11 @@ local hitboxEnabled = HitboxTab:Toggle({
 
 local hitboxSizeSlider = HitboxTab:Slider({
     Title = "Hitbox Size",
-    Desc = "Multiplier for hitbox size (1 = normal, 2 = double)",
-    Step = 0.1,
+    Desc = "Multiplier for hitbox size (1 = normal, up to 50x)",
+    Step = 0.5,
     Value = {
         Min = 0.5,
-        Max = 3,
+        Max = 50,
         Default = config.hitboxSize
     },
     Callback = function(value)
@@ -1620,6 +1639,11 @@ HitboxTab:Paragraph({
 HitboxTab:Paragraph({
     Title = "Hitbox Info",
     Desc = "Hitboxes are created on enemy players. With FastCastRedux hooks, shots that hit the extended hitbox will register as hits on the actual player."
+})
+
+HitboxTab:Paragraph({
+    Title = "FastCastRedux Note",
+    Desc = "FastCastRedux uses raycasts with velocity-based hit detection. The Hit remote expects velocity as the second argument, which matches FastCastRedux's RayHit event."
 })
 
 -- ===== CALIBRATION TAB =====
@@ -1854,3 +1878,4 @@ print("Press RightShift to toggle GUI")
 print("Click 'Unload Script' in the Calibration tab to fully unload")
 print("Hitbox Extender: " .. (config.hitboxEnabled and "ENABLED" or "DISABLED"))
 print("FastCastRedux Hook: " .. (fastCastHooked and "ACTIVE" or "INACTIVE"))
+print("FastCastRedux uses raycasts with velocity-based hit detection!")
