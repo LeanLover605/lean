@@ -1,9 +1,10 @@
--- ===== LINORIA LIBRARY LOADING =====
-local repo = 'https://raw.githubusercontent.com/RectangularObject/LinoriaLib/main/'
+-- ===== CLONEREF HANDLING =====
+local cloneref = cloneref or clonereference or function(instance)
+    return instance
+end
 
-local Library = loadstring(game:HttpGet(repo .. 'Library.lua'))()
-local ThemeManager = loadstring(game:HttpGet(repo .. 'addons/ThemeManager.lua'))()
-local SaveManager = loadstring(game:HttpGet(repo .. 'addons/SaveManager.lua'))()
+-- ===== WINDUI LOADING =====
+local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 
 -- ===== SERVICES =====
 local Players = game:GetService("Players")
@@ -47,12 +48,16 @@ local config = {
     autoCalibration = true,
     adaptiveCalibration = true,
     calibrationRate = 0.05,
+    
+    -- Hitbox Extender settings
     hitboxEnabled = false,
     hitboxSize = 1.5,
     hitboxColor = Color3.fromRGB(255, 0, 0),
     hitboxTransparency = 0.5,
     hitboxTeamCheck = false,
     hitboxPart = "Head",
+    
+    -- Chant Changer settings
     chantPackage = "English",
 }
 
@@ -61,13 +66,16 @@ local autoCalc = {
     ping = 0.05,
     pingSamples = {},
     pingSampleCount = 0,
+    
     totalShots = 0,
     totalHits = 0,
     hitRate = 0,
     lastShotTime = 0,
     shotCooldown = 0.5,
+    
     lastAdjustment = 0,
     adjustmentDirection = 0,
+    
     calibrationTarget = "prediction",
     calibrationValues = {
         prediction = { min = 0.05, max = 0.5, current = config.prediction },
@@ -75,6 +83,7 @@ local autoCalc = {
         bulletVelocity = { min = 100, max = 2000, current = config.bulletVelocity },
         gravityCompensation = { min = 0.5, max = 1.5, current = config.gravityCompensation }
     },
+    
     remoteFound = false,
     remoteType = nil,
     remotePath = nil,
@@ -88,14 +97,17 @@ local lastTargetPos = {}
 local targetVelocities = {}
 local currentTarget = nil
 local currentTargetPlayer = nil
+local enabledToggleElement = nil
+local guiElements = {}
 local hitRemote = nil
 local remoteConnection = nil
 local remoteSearching = false
+local isUILoaded = false
 local fastCast = nil
 local fastCastHooked = false
-local playerHitboxes = {}
-local originalFireServer = nil
-local isUILoaded = false
+
+-- ===== UI SLIDER REFERENCE STORAGE =====
+local sliderElements = {}
 
 -- ===== CONNECTIONS FOR CLEANUP =====
 local connections = {
@@ -104,6 +116,10 @@ local connections = {
     characterAdded = nil,
     hitboxUpdate = nil,
 }
+
+-- ===== HITBOX EXTENDER STATE =====
+local playerHitboxes = {}
+local originalFireServer = nil
 
 -- ===== CHANT CHANGER FUNCTIONS =====
 local function setChantPackage(packageName)
@@ -645,42 +661,51 @@ local function updateTargetVelocities()
     end
 end
 
--- ===== PREDICT TARGET POSITION =====
+-- ===== PREDICT TARGET POSITION (ORIGINAL WORKING VERSION) =====
 local function predictPosition(targetPart, player)
     if not targetPart or not targetPart.Parent then 
         return targetPart and targetPart.Position or Vector3.new(0, 0, 0)
     end
+    
     local basePosition = targetPart.Position
     local cameraPos = Camera.CFrame.Position
-    local pingCompensation = autoCalc.ping or 0.05
+    
     local distance = (basePosition - cameraPos).Magnitude
     local bulletTravelTime = math.clamp(distance / config.bulletVelocity, 0.01, 3)
     
+    -- Movement prediction
     if config.autoPrediction and targetVelocities[player] then
         local velocity = targetVelocities[player]
         local velocityMagnitude = velocity.Magnitude
+        
         if velocityMagnitude > 1 then
-            local leadTime = bulletTravelTime * config.prediction + pingCompensation
+            local leadTime = bulletTravelTime * config.prediction + (autoCalc.ping or 0.05)
+            
             local speedMultiplier = math.min(velocityMagnitude / 30, 2)
             leadTime = leadTime * (1 + speedMultiplier * 0.3)
+            
             basePosition = basePosition + (velocity * leadTime)
         end
     end
     
+    -- Bullet drop compensation
     if config.bulletDrop > 0 then
         local predictedDistance = (basePosition - cameraPos).Magnitude
         local travelTime = math.clamp(predictedDistance / config.bulletVelocity, 0.01, 3)
+        
         local drop = 0.5 * config.bulletDrop * travelTime * travelTime
         drop = drop * config.gravityCompensation
-        drop = drop * (1 + pingCompensation * 0.5)
+        
         basePosition = basePosition + Vector3.new(0, drop, 0)
     end
+    
     return basePosition
 end
 
 -- ===== GET CLOSEST TARGET IN FOV =====
 local function getClosestTarget()
     if not plr.Character or not plr.Character.Parent then return nil, nil end
+    
     local mousePos = UserInputService:GetMouseLocation()
     local fovRadius = config.fovRadius
     local closestTarget = nil
@@ -694,17 +719,26 @@ local function getClosestTarget()
                 local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
                 if humanoid and humanoid.Health > 0 then
                     local targetPart = player.Character:FindFirstChild(config.aimPart)
-                    if not targetPart then targetPart = player.Character:FindFirstChild("Head")
+                    if not targetPart then
+                        targetPart = player.Character:FindFirstChild("Head")
+                    end
+                    
                     if targetPart and targetPart.Parent then
                         local predictedPos = predictPosition(targetPart, player)
+                        
                         local toTarget = predictedPos - cameraPos
                         local forward = Camera.CFrame.LookVector
-                        if toTarget:Dot(forward) < 0 then continue end
+                        if toTarget:Dot(forward) < 0 then
+                            continue
+                        end
+                        
                         local screenPos, onScreen = Camera:WorldToViewportPoint(predictedPos)
+                        
                         if onScreen then
                             local screenPoint = Vector2.new(screenPos.X, screenPos.Y)
                             local mousePoint = Vector2.new(mousePos.X, mousePos.Y)
                             local distance = (screenPoint - mousePoint).Magnitude
+                            
                             if distance < closestDistance then
                                 local wallPassed = false
                                 if config.wallCheck then
@@ -712,10 +746,13 @@ local function getClosestTarget()
                                     rayParams.FilterDescendantsInstances = {plr.Character}
                                     rayParams.FilterType = Enum.RaycastFilterType.Blacklist
                                     rayParams.IgnoreWater = true
+                                    
                                     local direction = (predictedPos - cameraPos)
                                     local distanceToTarget = direction.Magnitude
                                     direction = direction.Unit * distanceToTarget
+                                    
                                     local rayResult = Workspace:Raycast(cameraPos, direction, rayParams)
+                                    
                                     if not rayResult then
                                         wallPassed = true
                                     elseif rayResult.Instance:IsDescendantOf(player.Character) then
@@ -724,6 +761,7 @@ local function getClosestTarget()
                                 else
                                     wallPassed = true
                                 end
+                                
                                 if wallPassed then
                                     closestDistance = distance
                                     closestTarget = targetPart
@@ -736,17 +774,26 @@ local function getClosestTarget()
             end
         end
     end
+    
     return closestTarget, closestPlayer
 end
 
 -- ===== SILENT AIM =====
 local function onRenderStepped()
     updateFOVPosition()
+    
     if not config.enabled then return end
-    if config.autoCalibration and tick() % 5 < 0.1 then detectPing() end
-    if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then trackShotAttempt() end
+    
+    if config.autoCalibration and tick() % 5 < 0.1 then
+        detectPing()
+    end
+    
+    if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
+        trackShotAttempt()
+    end
     
     local target, player = getClosestTarget()
+    
     if target and player then
         local predictedPos = predictPosition(target, player)
         local cameraPos = Camera.CFrame.Position
@@ -756,13 +803,24 @@ local function onRenderStepped()
             local currentLook = Camera.CFrame.LookVector
             local lerpFactor = 1 - math.pow(config.smoothing, 2)
             local newDirection = currentLook:Lerp(direction, math.clamp(lerpFactor, 0, 1))
-            local newCFrame = CFrame.new(cameraPos, cameraPos + newDirection)
+            
+            local newCFrame = CFrame.new(
+                cameraPos,
+                cameraPos + newDirection
+            )
+            
             local adjustedCFrame = Camera.CFrame:Lerp(newCFrame, math.clamp(lerpFactor * 0.1, 0, 0.1))
-            pcall(function() Camera.CFrame = adjustedCFrame end)
+            
+            pcall(function()
+                Camera.CFrame = adjustedCFrame
+            end)
         else
             local targetCFrame = CFrame.new(cameraPos, predictedPos)
-            pcall(function() Camera.CFrame = targetCFrame end)
+            pcall(function()
+                Camera.CFrame = targetCFrame
+            end)
         end
+        
         currentTarget = target
         currentTargetPlayer = player
     else
@@ -793,19 +851,48 @@ connections.hitboxUpdate = task.spawn(function()
     end
 end)
 
--- ===== SET UP KEYBIND =====
-local function setupToggleKeybind()
+-- ===== TOGGLE FUNCTION =====
+local function setEnabled(value)
+    config.enabled = value
+    
+    if enabledToggleElement then
+        pcall(function()
+            enabledToggleElement:Set(value)
+        end)
+    end
+    
+    if fovCircle then
+        fovCircle.Enabled = config.showFOV and value
+    end
+    
+    if not value then
+        currentTarget = nil
+        currentTargetPlayer = nil
+    end
+end
+
+-- ===== UPDATE TOGGLE KEYBIND =====
+local function updateToggleKeybind()
     if toggleKeyConnection then
         toggleKeyConnection:Disconnect()
         toggleKeyConnection = nil
     end
+    
     toggleKeyConnection = UserInputService.InputBegan:Connect(function(input, gameProcessed)
         if gameProcessed then return end
         if input.KeyCode == Enum.KeyCode[config.toggleKey] then
             config.enabled = not config.enabled
+            
+            if enabledToggleElement then
+                pcall(function()
+                    enabledToggleElement:Set(config.enabled)
+                end)
+            end
+            
             if fovCircle then
                 fovCircle.Enabled = config.showFOV and config.enabled
             end
+            
             if not config.enabled then
                 currentTarget = nil
                 currentTargetPlayer = nil
@@ -814,167 +901,229 @@ local function setupToggleKeybind()
     end)
 end
 
--- ===== CREATE LINORIA UI =====
-local Window = Library:CreateWindow({
-    Title = 'Silent Aim',
-    Center = true,
-    AutoShow = true,
+-- ===== CREATE GUI =====
+local Window = WindUI:CreateWindow({
+    Title = "Silent Aim",
+    Icon = "crosshair",
+    Author = "by Prayut",
+    Folder = "SilentAim",
+    
+    Size = UDim2.fromOffset(650, 600),
+    MinSize = Vector2.new(560, 400),
+    MaxSize = Vector2.new(850, 650),
+    ToggleKey = Enum.KeyCode.RightShift,
+    Transparent = true,
+    Theme = "Dark",
     Resizable = true,
-    ShowCustomCursor = true,
-    NotifySide = "Left",
-    TabPadding = 8,
-    MenuFadeTime = 0.2
+    SideBarWidth = 200,
+    BackgroundImageTransparency = 0.42,
+    HideSearchBar = true,
+    ScrollBarEnabled = false,
+    
+    User = {
+        Enabled = true,
+        Anonymous = false,
+        Callback = function()
+            print("User profile clicked")
+        end,
+    },
 })
 
--- Create tabs
-local MainTab = Window:AddTab('Main')
-local PredictionTab = Window:AddTab('Prediction')
-local HitboxTab = Window:AddTab('Hitbox')
-local ChantTab = Window:AddTab('Chant')
-local SettingsTab = Window:AddTab('Settings')
+Window._cleanup = cleanup
+
+-- ===== CREATE TABS =====
+local MainTab = Window:Tab({
+    Title = "Main",
+    Icon = "crosshair"
+})
+
+local PredictionTab = Window:Tab({
+    Title = "Prediction",
+    Icon = "target"
+})
+
+local HitboxTab = Window:Tab({
+    Title = "Hitbox Extender",
+    Icon = "expand"
+})
+
+local ChantTab = Window:Tab({
+    Title = "Chant Changer",
+    Icon = "music"
+})
+
+local CalibrationTab = Window:Tab({
+    Title = "Calibration",
+    Icon = "sliders"
+})
+
+local FOVTab = Window:Tab({
+    Title = "FOV",
+    Icon = "eye"
+})
+
+local SettingsTab = Window:Tab({
+    Title = "Settings",
+    Icon = "settings"
+})
 
 -- ===== MAIN TAB =====
-local MainGroup = MainTab:AddLeftGroupbox('Silent Aim Settings')
-
-MainGroup:AddToggle('Enabled', {
-    Text = 'Enabled',
-    Tooltip = 'Toggle silent aim on/off',
+local enabledToggle = MainTab:Toggle({
+    Title = "Enabled",
+    Desc = "Toggle silent aim on/off",
     Default = config.enabled,
-    Callback = function(value)
-        config.enabled = value
-        if fovCircle then
-            fovCircle.Enabled = config.showFOV and value
-        end
-        if not value then
-            currentTarget = nil
-            currentTargetPlayer = nil
+    Callback = function(value) 
+        if config.enabled ~= value then
+            config.enabled = value
+            
+            if fovCircle then
+                fovCircle.Enabled = config.showFOV and value
+            end
+            
+            if not value then
+                currentTarget = nil
+                currentTargetPlayer = nil
+            end
         end
     end
 })
+enabledToggleElement = enabledToggle
 
-MainGroup:AddSlider('FOVRadius', {
-    Text = 'FOV Radius',
-    Tooltip = 'Aim assist radius in pixels',
-    Default = config.fovRadius,
-    Min = 30,
-    Max = 500,
-    Rounding = 0,
+MainTab:Slider({
+    Title = "FOV Radius",
+    Desc = "Aim assist radius in pixels",
+    Step = 5,
+    Value = {
+        Min = 30,
+        Max = 500,
+        Default = config.fovRadius
+    },
     Callback = function(value)
         config.fovRadius = value
         updateFOVCircle()
     end
 })
 
-MainGroup:AddToggle('TeamCheck', {
-    Text = 'Team Check',
-    Tooltip = 'Only aim at enemies',
+MainTab:Toggle({
+    Title = "Team Check",
+    Desc = "Only aim at enemies",
     Default = config.teamCheck,
-    Callback = function(value)
-        config.teamCheck = value
+    Callback = function(value) 
+        config.teamCheck = value 
     end
 })
 
-MainGroup:AddDropdown('AimPart', {
-    Text = 'Aim Part',
-    Tooltip = 'Which body part to aim at',
-    Values = {'Head', 'Torso', 'HumanoidRootPart'},
-    Default = 1,
+MainTab:Dropdown({
+    Title = "Aim Part",
+    Desc = "Which body part to aim at",
+    Values = {"Head", "Torso", "HumanoidRootPart"},
+    Default = config.aimPart,
     Callback = function(value)
         config.aimPart = value
     end
 })
 
-MainGroup:AddToggle('WallCheck', {
-    Text = 'Wall Check',
-    Tooltip = 'Don\'t aim through walls',
+MainTab:Toggle({
+    Title = "Wall Check",
+    Desc = "Don't aim through walls",
     Default = config.wallCheck,
-    Callback = function(value)
-        config.wallCheck = value
+    Callback = function(value) 
+        config.wallCheck = value 
     end
 })
 
-MainGroup:AddSlider('Smoothing', {
-    Text = 'Smoothing',
-    Tooltip = 'Aim smoothness (0 = instant, 1 = very smooth)',
-    Default = config.smoothing,
-    Min = 0.05,
-    Max = 0.95,
-    Rounding = 2,
-    Callback = function(value)
-        config.smoothing = value
+MainTab:Slider({
+    Title = "Smoothing",
+    Desc = "Aim smoothness (0 = instant, 1 = very smooth)",
+    Step = 0.05,
+    Value = {
+        Min = 0.05,
+        Max = 0.95,
+        Default = config.smoothing
+    },
+    Callback = function(value) 
+        config.smoothing = value 
     end
 })
 
 -- ===== PREDICTION TAB =====
-local PredictionGroup = PredictionTab:AddLeftGroupbox('Prediction Settings')
-
-PredictionGroup:AddToggle('AutoPrediction', {
-    Text = 'Auto Prediction',
-    Tooltip = 'Automatically predict target movement',
+PredictionTab:Toggle({
+    Title = "Auto Prediction",
+    Desc = "Automatically predict target movement",
     Default = config.autoPrediction,
-    Callback = function(value)
-        config.autoPrediction = value
+    Callback = function(value) 
+        config.autoPrediction = value 
     end
 })
 
-PredictionGroup:AddSlider('PredictionMultiplier', {
-    Text = 'Prediction Multiplier',
-    Tooltip = 'How much to lead moving targets (higher = more lead)',
-    Default = config.prediction,
-    Min = 0,
-    Max = 1,
-    Rounding = 2,
-    Callback = function(value)
+local predictionSlider = PredictionTab:Slider({
+    Title = "Prediction Multiplier",
+    Desc = "How much to lead moving targets (higher = more lead)",
+    Step = 0.05,
+    Value = {
+        Min = 0,
+        Max = 1,
+        Default = config.prediction
+    },
+    Callback = function(value) 
         config.prediction = value
         autoCalc.calibrationValues.prediction.current = value
     end
 })
+sliderElements.predictionSlider = predictionSlider
 
-PredictionGroup:AddSlider('BulletVelocity', {
-    Text = 'Bullet Velocity',
-    Tooltip = 'Bullet speed in studs/second',
-    Default = config.bulletVelocity,
-    Min = 100,
-    Max = 2000,
-    Rounding = 0,
-    Callback = function(value)
+local velocitySlider = PredictionTab:Slider({
+    Title = "Bullet Velocity",
+    Desc = "Bullet speed in studs/second",
+    Step = 10,
+    Value = {
+        Min = 100,
+        Max = 2000,
+        Default = config.bulletVelocity
+    },
+    Callback = function(value) 
         config.bulletVelocity = value
         autoCalc.calibrationValues.bulletVelocity.current = value
     end
 })
+sliderElements.velocitySlider = velocitySlider
 
-PredictionGroup:AddSlider('BulletDrop', {
-    Text = 'Bullet Drop',
-    Tooltip = 'Bullet drop (gravity) in studs/s²',
-    Default = config.bulletDrop,
-    Min = 0,
-    Max = 50,
-    Rounding = 0,
-    Callback = function(value)
+local dropSlider = PredictionTab:Slider({
+    Title = "Bullet Drop",
+    Desc = "Bullet drop (gravity) in studs/s²",
+    Step = 1,
+    Value = {
+        Min = 0,
+        Max = 50,
+        Default = config.bulletDrop
+    },
+    Callback = function(value) 
         config.bulletDrop = value
         autoCalc.calibrationValues.bulletDrop.current = value
     end
 })
+sliderElements.dropSlider = dropSlider
 
-PredictionGroup:AddSlider('DropCompensation', {
-    Text = 'Drop Compensation',
-    Tooltip = 'Multiplier for bullet drop compensation',
-    Default = config.gravityCompensation,
-    Min = 0.5,
-    Max = 1.5,
-    Rounding = 2,
-    Callback = function(value)
+local compensationSlider = PredictionTab:Slider({
+    Title = "Drop Compensation",
+    Desc = "Multiplier for bullet drop compensation",
+    Step = 0.05,
+    Value = {
+        Min = 0.5,
+        Max = 1.5,
+        Default = config.gravityCompensation
+    },
+    Callback = function(value) 
         config.gravityCompensation = value
         autoCalc.calibrationValues.gravityCompensation.current = value
     end
 })
+sliderElements.compensationSlider = compensationSlider
 
--- ===== HITBOX TAB =====
-local HitboxGroup = HitboxTab:AddLeftGroupbox('Hitbox Extender')
-
-HitboxGroup:AddToggle('HitboxEnabled', {
-    Text = 'Hitbox Extender',
-    Tooltip = 'Toggle hitbox expansion on enemies',
+-- ===== HITBOX EXTENDER TAB =====
+local hitboxEnabled = HitboxTab:Toggle({
+    Title = "Hitbox Extender",
+    Desc = "Toggle hitbox expansion on enemies",
     Default = config.hitboxEnabled,
     Callback = function(value)
         config.hitboxEnabled = value
@@ -990,13 +1139,15 @@ HitboxGroup:AddToggle('HitboxEnabled', {
     end
 })
 
-HitboxGroup:AddSlider('HitboxSize', {
-    Text = 'Hitbox Size',
-    Tooltip = 'Multiplier for hitbox size (1 = normal, up to 50x)',
-    Default = config.hitboxSize,
-    Min = 0.5,
-    Max = 50,
-    Rounding = 1,
+local hitboxSizeSlider = HitboxTab:Slider({
+    Title = "Hitbox Size",
+    Desc = "Multiplier for hitbox size (1 = normal, up to 50x)",
+    Step = 0.5,
+    Value = {
+        Min = 0.5,
+        Max = 50,
+        Default = config.hitboxSize
+    },
     Callback = function(value)
         config.hitboxSize = value
         if config.hitboxEnabled then
@@ -1007,10 +1158,49 @@ HitboxGroup:AddSlider('HitboxSize', {
         end
     end
 })
+sliderElements.hitboxSizeSlider = hitboxSizeSlider
 
-HitboxGroup:AddToggle('HitboxTeamCheck', {
-    Text = 'Team Check',
-    Tooltip = 'Only extend hitboxes on enemies',
+HitboxTab:Colorpicker({
+    Title = "Hitbox Color",
+    Desc = "Choose the color of the hitbox",
+    Default = config.hitboxColor,
+    Callback = function(color)
+        config.hitboxColor = color
+        for player, data in pairs(playerHitboxes) do
+            if data.hitbox then
+                pcall(function()
+                    data.hitbox.Color = color
+                end)
+            end
+        end
+    end
+})
+
+local hitboxTransparencySlider = HitboxTab:Slider({
+    Title = "Hitbox Transparency",
+    Desc = "Transparency of the hitbox (0 = solid, 1 = invisible)",
+    Step = 0.05,
+    Value = {
+        Min = 0,
+        Max = 1,
+        Default = config.hitboxTransparency
+    },
+    Callback = function(value)
+        config.hitboxTransparency = value
+        for player, data in pairs(playerHitboxes) do
+            if data.hitbox then
+                pcall(function()
+                    data.hitbox.Transparency = value
+                end)
+            end
+        end
+    end
+})
+sliderElements.hitboxTransparencySlider = hitboxTransparencySlider
+
+HitboxTab:Toggle({
+    Title = "Team Check",
+    Desc = "Only extend hitboxes on enemies",
     Default = config.hitboxTeamCheck,
     Callback = function(value)
         config.hitboxTeamCheck = value
@@ -1023,11 +1213,11 @@ HitboxGroup:AddToggle('HitboxTeamCheck', {
     end
 })
 
-HitboxGroup:AddDropdown('HitboxPart', {
-    Text = 'Target Part',
-    Tooltip = 'Which body part to extend',
-    Values = {'Head', 'Torso', 'HumanoidRootPart'},
-    Default = 1,
+HitboxTab:Dropdown({
+    Title = "Target Part",
+    Desc = "Which body part to extend",
+    Values = {"Head", "Torso", "HumanoidRootPart"},
+    Default = config.hitboxPart,
     Callback = function(value)
         config.hitboxPart = value
         if config.hitboxEnabled then
@@ -1039,118 +1229,10 @@ HitboxGroup:AddDropdown('HitboxPart', {
     end
 })
 
--- ===== CHANT TAB =====
-local ChantGroup = ChantTab:AddLeftGroupbox('Chant Changer')
-
-ChantGroup:AddDropdown('ChantPackage', {
-    Text = 'Chant Package',
-    Tooltip = 'Select a chant package to apply to your character',
-    Values = chantPackages,
-    Default = 1,
-    Callback = function(value)
-        setChantPackage(value)
-    end
-})
-
-ChantGroup:AddButton({
-    Text = 'Refresh Chant',
-    Tooltip = 'Re-apply the current chant package',
-    DoubleClick = false,
-    Func = function()
-        setChantPackage(config.chantPackage)
-        print("Refreshed chant package: " .. config.chantPackage)
-    end
-})
-
-ChantGroup:AddButton({
-    Text = 'Random Chant',
-    Tooltip = 'Apply a random chant package',
-    DoubleClick = false,
-    Func = function()
-        local randomIndex = math.random(1, #chantPackages)
-        local randomChant = chantPackages[randomIndex]
-        setChantPackage(randomChant)
-        print("Applied random chant package: " .. randomChant)
-    end
-})
-
-ChantGroup:AddLabel('Current Chant: ' .. (config.chantPackage or "Not set"))
-ChantGroup:AddLabel(#chantPackages .. ' chant packages available')
-
--- ===== SETTINGS TAB =====
-local SettingsGroup = SettingsTab:AddLeftGroupbox('Keybinds')
-
-SettingsGroup:AddKeyPicker('ToggleKey', {
-    Text = 'Toggle Key',
-    Tooltip = 'Key to enable/disable silent aim',
-    Default = 'Delete',
-    Mode = 'Toggle',
-    NoUI = false,
-    ChangedCallback = function(New)
-        config.toggleKey = New
-        setupToggleKeybind()
-    end
-})
-
-SettingsGroup:AddKeyPicker('MenuKey', {
-    Text = 'GUI Toggle Key',
-    Tooltip = 'Key to open/close the GUI',
-    Default = 'RightShift',
-    Mode = 'Toggle',
-    NoUI = false,
-    ChangedCallback = function(New)
-        Window:SetKeybind(Enum.KeyCode[New])
-    end
-})
-
-SettingsGroup:AddSlider('CalibrationRate', {
-    Text = 'Calibration Rate',
-    Tooltip = 'How aggressively to adjust values (higher = faster adjustment)',
-    Default = config.calibrationRate,
-    Min = 0.01,
-    Max = 0.2,
-    Rounding = 2,
-    Callback = function(value)
-        config.calibrationRate = value
-    end
-})
-
-local ButtonGroup = SettingsTab:AddRightGroupbox('Actions')
-
-ButtonGroup:AddButton({
-    Text = 'Calibrate Now',
-    Tooltip = 'Manually run auto-calibration',
-    DoubleClick = false,
-    Func = function()
-        performAutoCalibration()
-        print("Calibration complete! Detected values:")
-        print("Ping: " .. math.floor(autoCalc.ping * 1000) .. "ms")
-        print("Bullet Velocity: " .. config.bulletVelocity .. " studs/s")
-        print("Bullet Drop: " .. config.bulletDrop .. " studs/s²")
-        print("Prediction: " .. config.prediction)
-    end
-})
-
-ButtonGroup:AddButton({
-    Text = 'Find Hit Remote',
-    Tooltip = 'Manually search for the Hit remote',
-    DoubleClick = false,
-    Func = function()
-        print("Manual remote search...")
-        local found = setupHitRemoteListener()
-        if found then
-            print("Found remote: " .. autoCalc.remoteName)
-        else
-            print("No remote found.")
-        end
-    end
-})
-
-ButtonGroup:AddButton({
-    Text = 'Refresh Hitboxes',
-    Tooltip = 'Manually refresh all hitboxes',
-    DoubleClick = false,
-    Func = function()
+HitboxTab:Button({
+    Title = "Refresh Hitboxes",
+    Desc = "Manually refresh all hitboxes",
+    Callback = function()
         if config.hitboxEnabled then
             for player, _ in pairs(playerHitboxes) do
                 removeHitboxForPlayer(player)
@@ -1165,11 +1247,10 @@ ButtonGroup:AddButton({
     end
 })
 
-ButtonGroup:AddButton({
-    Text = 'Force Hook FastCast',
-    Tooltip = 'Manually hook FastCastRedux if it wasn\'t detected',
-    DoubleClick = false,
-    Func = function()
+HitboxTab:Button({
+    Title = "Force Hook FastCast",
+    Desc = "Manually hook FastCastRedux if it wasn't detected",
+    Callback = function()
         local success = hookFastCastRedux()
         if success then
             print("FastCastRedux hooked successfully!")
@@ -1179,76 +1260,253 @@ ButtonGroup:AddButton({
     end
 })
 
-ButtonGroup:AddButton({
-    Text = 'Reset Statistics',
-    Tooltip = 'Reset hit/miss tracking statistics',
-    DoubleClick = false,
-    Func = function()
+HitboxTab:Paragraph({
+    Title = "FastCast Status",
+    Desc = fastCastHooked and "FastCastRedux is hooked!" or "FastCastRedux not hooked yet."
+})
+
+HitboxTab:Paragraph({
+    Title = "Hitbox Info",
+    Desc = "Hitboxes are created on enemy players. With FastCastRedux hooks, shots that hit the extended hitbox will register as hits on the actual player."
+})
+
+HitboxTab:Paragraph({
+    Title = "FastCastRedux Note",
+    Desc = "FastCastRedux uses raycasts with velocity-based hit detection. The Hit remote expects velocity as the second argument."
+})
+
+-- ===== CHANT CHANGER TAB =====
+ChantTab:Paragraph({
+    Title = "Chant Changer",
+    Desc = "Change your character's chant package to any available nationality or regiment."
+})
+
+ChantTab:Dropdown({
+    Title = "Chant Package",
+    Desc = "Select a chant package to apply to your character",
+    Values = chantPackages,
+    Default = config.chantPackage,
+    Callback = function(value)
+        setChantPackage(value)
+    end
+})
+
+ChantTab:Button({
+    Title = "Refresh Chant",
+    Desc = "Re-apply the current chant package",
+    Callback = function()
+        setChantPackage(config.chantPackage)
+        print("Refreshed chant package: " .. config.chantPackage)
+    end
+})
+
+ChantTab:Button({
+    Title = "Random Chant",
+    Desc = "Apply a random chant package",
+    Callback = function()
+        local randomIndex = math.random(1, #chantPackages)
+        local randomChant = chantPackages[randomIndex]
+        setChantPackage(randomChant)
+        print("Applied random chant package: " .. randomChant)
+    end
+})
+
+ChantTab:Paragraph({
+    Title = "Current Chant",
+    Desc = "Current chant package: " .. (config.chantPackage or "Not set")
+})
+
+ChantTab:Paragraph({
+    Title = "Available Packages",
+    Desc = #chantPackages .. " chant packages available"
+})
+
+-- ===== CALIBRATION TAB =====
+CalibrationTab:Toggle({
+    Title = "Auto Calibration",
+    Desc = "Automatically detect bullet velocity, drop, and ping",
+    Default = config.autoCalibration,
+    Callback = function(value)
+        config.autoCalibration = value
+        if value then
+            performAutoCalibration()
+        end
+    end
+})
+
+CalibrationTab:Toggle({
+    Title = "Adaptive Calibration",
+    Desc = "Adjust prediction values based on hit/miss ratio",
+    Default = config.adaptiveCalibration,
+    Callback = function(value)
+        config.adaptiveCalibration = value
+    end
+})
+
+CalibrationTab:Button({
+    Title = "Calibrate Now",
+    Desc = "Manually run auto-calibration",
+    Callback = function()
+        performAutoCalibration()
+        print("Calibration complete! Detected values:")
+        print("Ping: " .. math.floor(autoCalc.ping * 1000) .. "ms")
+        print("Bullet Velocity: " .. config.bulletVelocity .. " studs/s")
+        print("Bullet Drop: " .. config.bulletDrop .. " studs/s²")
+        print("Prediction: " .. config.prediction)
+    end
+})
+
+CalibrationTab:Button({
+    Title = "Reset Statistics",
+    Desc = "Reset hit/miss tracking statistics",
+    Callback = function()
         autoCalc.totalShots = 0
         autoCalc.totalHits = 0
         autoCalc.hitRate = 0
         print("Statistics reset!")
+        if isUILoaded and guiElements.hitRateText then
+            pcall(function()
+                guiElements.hitRateText:SetDesc("Current hit rate: 0% (0/0)")
+            end)
+        end
     end
 })
 
-ButtonGroup:AddButton({
-    Text = 'Unload Script',
-    Tooltip = 'Completely unload the script and clean up all connections',
-    DoubleClick = false,
-    Func = function()
+CalibrationTab:Button({
+    Title = "Unload Script",
+    Desc = "Completely unload the script and clean up all connections",
+    Callback = function()
         cleanup()
     end
 })
 
--- ===== CLEANUP FUNCTION =====
-function cleanup()
-    print("Cleaning up Silent Aim script...")
-    
-    if originalFireServer and hitRemote then
-        pcall(function() hitRemote.FireServer = originalFireServer end)
-        originalFireServer = nil
+local hitRateText = CalibrationTab:Paragraph({
+    Title = "Hit Statistics",
+    Desc = "Current hit rate: 0% (0/0)",
+})
+guiElements.hitRateText = hitRateText
+
+local calibrationTargetText = CalibrationTab:Paragraph({
+    Title = "Active Calibration Target",
+    Desc = "Currently calibrating: " .. autoCalc.calibrationTarget,
+})
+guiElements.calibrationTargetText = calibrationTargetText
+
+local remoteStatusText = CalibrationTab:Paragraph({
+    Title = "Remote Status",
+    Desc = autoCalc.remoteFound and "Remote found: " .. autoCalc.remoteName .. " at " .. (autoCalc.remotePath or "unknown path") or "Remote not found",
+})
+guiElements.remoteStatusText = remoteStatusText
+
+CalibrationTab:Button({
+    Title = "Find Hit Remote",
+    Desc = "Manually search for the Hit remote",
+    Callback = function()
+        print("Manual remote search...")
+        local found = setupHitRemoteListener()
+        if found then
+            print("Found remote: " .. autoCalc.remoteName)
+            if isUILoaded and guiElements.remoteStatusText then
+                pcall(function()
+                    guiElements.remoteStatusText:SetDesc("Remote found: " .. autoCalc.remoteName .. " at " .. (autoCalc.remotePath or "unknown path"))
+                end)
+            end
+        else
+            print("No remote found.")
+        end
     end
-    
-    if remoteConnection then pcall(function() remoteConnection:Disconnect() end) remoteConnection = nil end
-    if toggleKeyConnection then pcall(function() toggleKeyConnection:Disconnect() end) toggleKeyConnection = nil end
-    if connections.renderStepped then pcall(function() connections.renderStepped:Disconnect() end) connections.renderStepped = nil end
-    if connections.velocityLoop then pcall(function() connections.velocityLoop:Disconnect() end) connections.velocityLoop = nil end
-    if connections.characterAdded then pcall(function() connections.characterAdded:Disconnect() end) connections.characterAdded = nil end
-    if connections.hitboxUpdate then pcall(function() connections.hitboxUpdate:Disconnect() end) connections.hitboxUpdate = nil end
-    
-    for player, data in pairs(playerHitboxes) do
-        if data.hitbox then pcall(function() data.hitbox:Destroy() end) end
-        if data.connection then pcall(function() data.connection:Disconnect() end) end
+})
+
+-- ===== FOV TAB =====
+FOVTab:Toggle({
+    Title = "Show FOV Circle",
+    Desc = "Toggle FOV circle visibility",
+    Default = config.showFOV,
+    Callback = function(value)
+        config.showFOV = value
+        if fovCircle then
+            fovCircle.Enabled = value and config.enabled
+        end
     end
-    playerHitboxes = {}
-    
-    if fovCircle then pcall(function() fovCircle:Destroy() end) fovCircle = nil end
-    if Window then pcall(function() Window:Unload() end) Window = nil end
-    
-    lastTargetPos = {}
-    targetVelocities = {}
-    currentTarget = nil
-    currentTargetPlayer = nil
-    hitRemote = nil
-    fastCast = nil
-    fastCastHooked = false
-    isUILoaded = false
-    config.enabled = false
-    config.hitboxEnabled = false
-    
-    print("Cleanup complete!")
-end
+})
+
+FOVTab:Colorpicker({
+    Title = "FOV Color",
+    Desc = "Choose FOV circle color",
+    Default = config.fovColor,
+    Callback = function(color)
+        config.fovColor = color
+        updateFOVCircle()
+    end
+})
+
+FOVTab:Slider({
+    Title = "FOV Transparency",
+    Desc = "FOV circle transparency",
+    Step = 0.05,
+    Value = {
+        Min = 0,
+        Max = 1,
+        Default = config.fovTransparency
+    },
+    Callback = function(value)
+        config.fovTransparency = value
+        updateFOVCircle()
+    end
+})
+
+-- ===== SETTINGS TAB =====
+SettingsTab:Keybind({
+    Title = "Toggle Key",
+    Desc = "Key to enable/disable silent aim",
+    Value = config.toggleKey,
+    Callback = function(key)
+        config.toggleKey = key
+        updateToggleKeybind()
+    end
+})
+
+SettingsTab:Keybind({
+    Title = "GUI Toggle Key",
+    Desc = "Key to open/close the GUI",
+    Value = config.guikey,
+    Callback = function(key)
+        config.guikey = key
+        Window:SetToggleKey(Enum.KeyCode[key])
+    end
+})
+
+SettingsTab:Slider({
+    Title = "Calibration Rate",
+    Desc = "How aggressively to adjust values (higher = faster adjustment)",
+    Step = 0.01,
+    Value = {
+        Min = 0.01,
+        Max = 0.2,
+        Default = config.calibrationRate
+    },
+    Callback = function(value)
+        config.calibrationRate = value
+    end
+})
+
+-- ===== UI IS NOW FULLY LOADED =====
+isUILoaded = true
+print("UI fully loaded!")
 
 -- ===== INITIAL SETUP =====
-setupToggleKeybind()
+updateToggleKeybind()
 
+-- Initialize chant package on load
 task.wait(1)
 local function initChantPackage()
     if not plr then return end
+    
     local chantValue = plr:FindFirstChild("ChantPackage")
     if not chantValue and plr.Character then
         chantValue = plr.Character:FindFirstChild("ChantPackage")
     end
+    
     if chantValue then
         config.chantPackage = chantValue.Value
         print("Current chant package: " .. config.chantPackage)
@@ -1259,11 +1517,23 @@ end
 initChantPackage()
 
 task.wait(1)
-setupHitRemoteListener()
+local remoteFound = setupHitRemoteListener()
+
+if not remoteFound then
+    task.spawn(function()
+        while true do
+            task.wait(10)
+            if setupHitRemoteListener() then
+                break
+            end
+        end
+    end)
+end
 
 task.wait(1)
 performAutoCalibration()
 
+-- Hook FastCastRedux if hitbox extender is enabled
 if config.hitboxEnabled then
     task.wait(0.5)
     hookFastCastRedux()
@@ -1276,7 +1546,10 @@ connections.characterAdded = plr.CharacterAdded:Connect(function(character)
     targetVelocities = {}
     currentTarget = nil
     currentTargetPlayer = nil
-    if config.autoCalibration then performAutoCalibration() end
+    if config.autoCalibration then
+        performAutoCalibration()
+    end
+    
     task.wait(0.5)
     local chantValue = character:FindFirstChild("ChantPackage")
     if chantValue then
@@ -1303,7 +1576,7 @@ end)
 print("Silent Aim script loaded successfully!")
 print("Press Delete to toggle silent aim on/off")
 print("Press RightShift to toggle GUI")
-print("Click 'Unload Script' in the Settings tab to fully unload")
+print("Click 'Unload Script' in the Calibration tab to fully unload")
 print("Hitbox Extender: " .. (config.hitboxEnabled and "ENABLED" or "DISABLED"))
 print("FastCastRedux Hook: " .. (fastCastHooked and "ACTIVE" or "INACTIVE"))
 print("Current Chant Package: " .. (config.chantPackage or "Not set"))
