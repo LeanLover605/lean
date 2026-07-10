@@ -1,9 +1,7 @@
 -- ===== LINORIA LIBRARY LOADING =====
-local repo = 'https://raw.githubusercontent.com/RectangularObject/LinoriaLib/main/'
-
-local Library = loadstring(game:HttpGet(repo .. 'Library.lua'))()
-local ThemeManager = loadstring(game:HttpGet(repo .. 'addons/ThemeManager.lua'))()
-local SaveManager = loadstring(game:HttpGet(repo .. 'addons/SaveManager.lua'))()
+local Library = loadstring(game:HttpGet('https://github.com/zic1/LinoriaLib/Library.lua'))()
+local ThemeManager = loadstring(game:HttpGet('https://github.com/zic1/LinoriaLib/addons/ThemeManager.lua'))()
+local SaveManager = loadstring(game:HttpGet('https://github.com/zic1/LinoriaLib/SaveManager.lua'))()
 
 -- ===== SERVICES =====
 local Players = game:GetService("Players")
