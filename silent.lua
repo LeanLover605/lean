@@ -131,7 +131,7 @@ local autoCalc = {
     remoteName = nil,
 }
 
--- ===== CLEANUP FUNCTION =====
+-- ===== CLEANUP FUNCTION (FIXED - Properly Destroys GUI) =====
 local function cleanup()
     print("Cleaning up VaM Client...")
     
@@ -226,6 +226,7 @@ local function cleanup()
         fovCircle = nil
     end
     
+    -- CRITICAL FIX: Properly destroy the GUI window
     if Window then
         pcall(function()
             Library:Unload()
@@ -233,13 +234,31 @@ local function cleanup()
         Window = nil
     end
     
-    local screenGui = game:GetService("CoreGui"):FindFirstChild("Linoria")
-    if screenGui then
+    -- Aggressively find and destroy any remaining Linoria GUI elements
+    local coreGui = game:GetService("CoreGui")
+    
+    -- Destroy Linoria ScreenGui
+    local linoriaGui = coreGui:FindFirstChild("Linoria")
+    if linoriaGui then
         pcall(function()
-            screenGui:Destroy()
+            linoriaGui:Destroy()
         end)
     end
     
+    -- Destroy any other ScreenGuis that might have been created
+    for _, gui in ipairs(coreGui:GetChildren()) do
+        if gui:IsA("ScreenGui") then
+            local name = gui.Name
+            -- Check for common Linoria-related names
+            if name:find("Linoria") or name:find("Color") or name:find("Picker") or name:find("Keybind") then
+                pcall(function()
+                    gui:Destroy()
+                end)
+            end
+        end
+    end
+    
+    -- Clear all state variables
     lastTargetPos = {}
     targetVelocities = {}
     fastCastHooked = false
