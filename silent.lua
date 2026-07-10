@@ -49,13 +49,16 @@ local config = {
     fovColor = Color3.fromRGB(255, 255, 255),
     fovTransparency = 0.7,
     toggleKey = "Delete",
+    guiToggleKey = "RightShift",
     smoothing = 0.3,
     wallCheck = false,
-    prediction = 0.15,
+    prediction = 0.25,
     bulletVelocity = WEAPON_SETTINGS.Velocity,
     bulletDrop = 5,
     autoPrediction = true,
-    gravityCompensation = 1.0,
+    gravityCompensation = 1.5,
+    longRangeCompensation = 1.5,
+    mountedLeadMultiplier = 2.0,
     autoCalibration = true,
     adaptiveCalibration = true,
     calibrationRate = 0.05,
@@ -67,6 +70,19 @@ local config = {
     hitboxPart = "Head",
     chantPackage = "English",
     velocityDeviation = WEAPON_SETTINGS.VelocityDeviation,
+    debugMode = false,
+    
+    -- ESP Settings
+    espEnabled = false,
+    espTeamCheck = false,
+    espOutlineEnabled = false,
+    espOutlineColor = Color3.fromRGB(255, 255, 255),
+    espUseTeamColor = true,
+    espOutlineThickness = 2,
+    espNameEnabled = true,
+    espShowDistance = true,
+    espWallColor = Color3.fromRGB(128, 0, 255),
+    espWallHue = 0.75,
 }
 
 -- ===== STATE =====
@@ -80,6 +96,10 @@ local playerHitboxes = {}
 local originalFireServer = nil
 local isUILoaded = false
 
+-- ===== ESP STATE =====
+local espObjects = {}
+local espUpdateConnection = nil
+
 -- ===== CONNECTIONS (FOR CLEANUP) =====
 local connections = {
     renderStepped = nil,
@@ -87,6 +107,7 @@ local connections = {
     characterAdded = nil,
     hitboxUpdate = nil,
     toggleKeybind = nil,
+    espUpdate = nil,
 }
 
 -- ===== AUTO-CALCULATION =====
@@ -104,17 +125,30 @@ local autoCalc = {
         prediction = { min = 0.05, max = 0.5, current = config.prediction },
         bulletDrop = { min = 0, max = 30, current = config.bulletDrop },
         bulletVelocity = { min = 100, max = 2000, current = config.bulletVelocity },
-        gravityCompensation = { min = 0.5, max = 1.5, current = config.gravityCompensation }
+        gravityCompensation = { min = 0.5, max = 3.0, current = config.gravityCompensation }
     },
     remoteFound = false,
     remoteName = nil,
 }
 
--- ===== CLEANUP FUNCTION =====
+-- ===== CLEANUP FUNCTION (FIXED - PROPERLY DESTROYS GUI) =====
 local function cleanup()
     print("Cleaning up Silent Aim script...")
     
-    -- Restore original Hit remote FireServer
+    -- Cleanup ESP
+    for player, data in pairs(espObjects) do
+        if data.outline then pcall(function() data.outline:Destroy() end) end
+        if data.nameLabel then pcall(function() data.nameLabel:Destroy() end) end
+        if data.distanceLabel then pcall(function() data.distanceLabel:Destroy() end) end
+        if data.connection then pcall(function() data.connection:Disconnect() end) end
+    end
+    espObjects = {}
+    
+    if espUpdateConnection then
+        pcall(function() espUpdateConnection:Disconnect() end)
+        espUpdateConnection = nil
+    end
+    
     if originalFireServer and hitRemote then
         pcall(function()
             hitRemote.FireServer = originalFireServer
@@ -122,7 +156,6 @@ local function cleanup()
         originalFireServer = nil
     end
     
-    -- Disconnect remote connection
     if remoteConnection then
         pcall(function()
             remoteConnection:Disconnect()
@@ -130,7 +163,6 @@ local function cleanup()
         remoteConnection = nil
     end
     
-    -- Disconnect toggle keybind
     if connections.toggleKeybind then
         pcall(function()
             connections.toggleKeybind:Disconnect()
@@ -138,7 +170,6 @@ local function cleanup()
         connections.toggleKeybind = nil
     end
     
-    -- Disconnect render stepped
     if connections.renderStepped then
         pcall(function()
             connections.renderStepped:Disconnect()
@@ -146,7 +177,6 @@ local function cleanup()
         connections.renderStepped = nil
     end
     
-    -- Disconnect velocity loop
     if connections.velocityLoop then
         pcall(function()
             connections.velocityLoop:Disconnect()
@@ -154,7 +184,6 @@ local function cleanup()
         connections.velocityLoop = nil
     end
     
-    -- Disconnect character added
     if connections.characterAdded then
         pcall(function()
             connections.characterAdded:Disconnect()
@@ -162,7 +191,6 @@ local function cleanup()
         connections.characterAdded = nil
     end
     
-    -- Disconnect hitbox update loop
     if connections.hitboxUpdate then
         pcall(function()
             connections.hitboxUpdate:Disconnect()
@@ -170,7 +198,13 @@ local function cleanup()
         connections.hitboxUpdate = nil
     end
     
-    -- Destroy all hitboxes
+    if connections.espUpdate then
+        pcall(function()
+            connections.espUpdate:Disconnect()
+        end)
+        connections.espUpdate = nil
+    end
+    
     for _, data in pairs(playerHitboxes) do
         if data.hitbox then
             pcall(function()
@@ -185,7 +219,6 @@ local function cleanup()
     end
     playerHitboxes = {}
     
-    -- Destroy FOV circle
     if fovCircle then
         pcall(function()
             fovCircle:Destroy()
@@ -193,7 +226,7 @@ local function cleanup()
         fovCircle = nil
     end
     
-    -- Unload the UI
+    -- CRITICAL FIX: Properly destroy the GUI window
     if Window then
         pcall(function()
             Library:Unload()
@@ -201,12 +234,20 @@ local function cleanup()
         Window = nil
     end
     
-    -- Clear all state
+    -- Also ensure the ScreenGui is destroyed if Library:Unload() didn't catch it
+    local screenGui = game:GetService("CoreGui"):FindFirstChild("Linoria")
+    if screenGui then
+        pcall(function()
+            screenGui:Destroy()
+        end)
+    end
+    
     lastTargetPos = {}
     targetVelocities = {}
     fastCastHooked = false
     config.enabled = false
     config.hitboxEnabled = false
+    config.espEnabled = false
     
     print("Cleanup complete! Script fully unloaded.")
 end
@@ -275,6 +316,20 @@ end
 -- ===== HELPER FUNCTIONS =====
 local function getTargetPart(player)
     if not player or not player.Character then return nil end
+    
+    local mount = player.Character:FindFirstChild("Horse") or 
+                  player.Character:FindFirstChild("Vehicle") or 
+                  player.Character:FindFirstChild("Mount")
+    
+    if mount then
+        local mountPart = mount:FindFirstChild("Head") or 
+                         mount:FindFirstChild("Torso") or 
+                         mount:FindFirstChild("HumanoidRootPart")
+        if mountPart then
+            return mountPart
+        end
+    end
+    
     return player.Character:FindFirstChild(config.aimPart) or player.Character:FindFirstChild("Head")
 end
 
@@ -316,41 +371,107 @@ end
 -- ===== HOOK FASTCASTREDUX =====
 local function hookFastCastRedux()
     if fastCastHooked then return true end
+    
+    print("Attempting to hook FastCastRedux...")
+    
     local fastCastModule = ReplicatedStorage:FindFirstChild("Tools")
     if fastCastModule then
         local components = fastCastModule:FindFirstChild("Components")
         if components then
             local muzzle = components:FindFirstChild("Muzzle")
             if muzzle then
-                local fastCast = muzzle:FindFirstChild("FastCastRedux")
-                if fastCast then
-                    local fastCastInstance = nil
-                    if fastCast.__index and fastCast.__index.RayHit then
-                        fastCastInstance = fastCast
-                    end
-                    if not fastCastInstance and _G.FastCast then
-                        fastCastInstance = _G.FastCast
-                    end
-                    if fastCastInstance and fastCastInstance.RayHit then
-                        local oldRayHit = fastCastInstance.RayHit
-                        fastCastInstance.RayHit = function(cast, result, velocity, cosmeticBullet)
-                            local hitPart = result and result.Instance
-                            local hitPlayer = getPlayerFromPart(hitPart)
-                            if hitPlayer and playerHitboxes[hitPlayer] then
-                                fireHitRemote(hitPlayer, velocity)
-                            end
-                            if oldRayHit then
-                                return oldRayHit(cast, result, velocity, cosmeticBullet)
+                local fastCastScript = muzzle:FindFirstChild("FastCastRedux")
+                if fastCastScript then
+                    print("Found FastCastRedux module script!")
+                    
+                    local success, fastCast = pcall(function()
+                        return require(fastCastScript)
+                    end)
+                    
+                    if success and fastCast then
+                        print("FastCastRedux module required successfully!")
+                        
+                        local fastCastInstance = nil
+                        
+                        if fastCast.RayHit then
+                            fastCastInstance = fastCast
+                            print("Method 1: Using required module directly")
+                        end
+                        
+                        if not fastCastInstance and _G.FastCast and _G.FastCast.RayHit then
+                            fastCastInstance = _G.FastCast
+                            print("Method 2: Found global FastCast instance")
+                        end
+                        
+                        if not fastCastInstance then
+                            for _, obj in ipairs(Workspace:GetDescendants()) do
+                                if obj:IsA("ModuleScript") and obj.Name == "FastCastRedux" then
+                                    local s, r = pcall(function()
+                                        return require(obj)
+                                    end)
+                                    if s and r and r.RayHit then
+                                        fastCastInstance = r
+                                        print("Method 3: Found FastCast instance via workspace search")
+                                        break
+                                    end
+                                end
                             end
                         end
-                        fastCastHooked = true
-                        print("FastCastRedux hooked successfully!")
-                        return true
+                        
+                        if not fastCastInstance and fastCast.new then
+                            local oldNew = fastCast.new
+                            fastCast.new = function(...)
+                                local instance = oldNew(...)
+                                if instance and instance.RayHit then
+                                    local oldRayHit = instance.RayHit
+                                    instance.RayHit = function(cast, result, velocity, cosmeticBullet)
+                                        local hitPart = result and result.Instance
+                                        local hitPlayer = getPlayerFromPart(hitPart)
+                                        if hitPlayer and playerHitboxes[hitPlayer] then
+                                            print("FastCast hit extended hitbox: " .. hitPlayer.Name)
+                                            fireHitRemote(hitPlayer, velocity)
+                                        end
+                                        if oldRayHit then
+                                            return oldRayHit(cast, result, velocity, cosmeticBullet)
+                                        end
+                                    end
+                                end
+                                return instance
+                            end
+                            fastCastHooked = true
+                            print("FastCastRedux .new() hooked successfully!")
+                            return true
+                        end
+                        
+                        if fastCastInstance and fastCastInstance.RayHit then
+                            print("Hooking FastCastRedux RayHit event...")
+                            
+                            local oldRayHit = fastCastInstance.RayHit
+                            fastCastInstance.RayHit = function(cast, result, velocity, cosmeticBullet)
+                                local hitPart = result and result.Instance
+                                local hitPlayer = getPlayerFromPart(hitPart)
+                                if hitPlayer and playerHitboxes[hitPlayer] then
+                                    print("FastCast hit extended hitbox: " .. hitPlayer.Name)
+                                    fireHitRemote(hitPlayer, velocity)
+                                end
+                                if oldRayHit then
+                                    return oldRayHit(cast, result, velocity, cosmeticBullet)
+                                end
+                            end
+                            
+                            fastCastHooked = true
+                            print("FastCastRedux hooked successfully!")
+                            return true
+                        end
+                    else
+                        print("Failed to require FastCastRedux module.")
                     end
                 end
             end
         end
     end
+    
+    print("Failed to hook FastCastRedux.")
     return false
 end
 
@@ -379,17 +500,20 @@ local function createHitboxForPlayer(player)
     if not player or not player.Character then return end
     removeHitboxForPlayer(player)
     local targetPart = getTargetPart(player)
-    if not targetPart then return end
+    if not targetPart then 
+        print("No target part found for: " .. player.Name)
+        return 
+    end
     
     local hitbox = Instance.new("Part")
     hitbox.Name = "ExtendedHitbox"
     hitbox.Anchored = false
     hitbox.CanCollide = true
     hitbox.Massless = true
-    hitbox.Transparency = config.hitboxTransparency
-    hitbox.Color = config.hitboxColor
+    hitbox.Transparency = config.hitboxTransparency or 0.5
+    hitbox.Color = config.hitboxColor or Color3.fromRGB(255, 0, 0)
     hitbox.Material = Enum.Material.Neon
-    hitbox.Size = targetPart.Size * config.hitboxSize
+    hitbox.Size = targetPart.Size * (config.hitboxSize or 1.5)
     
     local weld = Instance.new("Weld")
     weld.Part0 = targetPart
@@ -418,6 +542,7 @@ local function createHitboxForPlayer(player)
     end)
     
     playerHitboxes[player] = { hitbox = hitbox, weld = weld, targetPart = targetPart, connection = connection }
+    print("Created hitbox for: " .. player.Name)
 end
 
 local function removeHitboxForPlayer(player)
@@ -429,6 +554,7 @@ local function removeHitboxForPlayer(player)
             pcall(function() playerHitboxes[player].connection:Disconnect() end)
         end
         playerHitboxes[player] = nil
+        print("Removed hitbox for: " .. player.Name)
     end
 end
 
@@ -490,20 +616,30 @@ local function detectPing()
     return autoCalc.ping
 end
 
--- ===== TRACK TARGET VELOCITIES =====
+-- ===== IMPROVED VELOCITY TRACKING =====
 local function updateTargetVelocities()
     local dt = 0.05
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= plr and player.Character and player.Character.Parent then
+            local isMounted = false
+            if player.Character:FindFirstChild("Horse") or 
+               player.Character:FindFirstChild("Vehicle") or
+               player.Character:FindFirstChild("Mount") then
+                isMounted = true
+            end
+            
             local targetPart = getTargetPart(player)
             if targetPart and targetPart.Parent then
                 local currentPos = targetPart.Position
                 if lastTargetPos[player] then
                     local delta = currentPos - lastTargetPos[player]
+                    local rawVelocity = delta / dt
+                    
                     if targetVelocities[player] then
-                        targetVelocities[player] = targetVelocities[player] * 0.7 + (delta / dt) * 0.3
+                        local smoothingFactor = isMounted and 0.5 or 0.7
+                        targetVelocities[player] = targetVelocities[player] * smoothingFactor + rawVelocity * (1 - smoothingFactor)
                     else
-                        targetVelocities[player] = delta / dt
+                        targetVelocities[player] = rawVelocity
                     end
                 else
                     targetVelocities[player] = Vector3.new(0, 0, 0)
@@ -517,7 +653,7 @@ local function updateTargetVelocities()
     end
 end
 
--- ===== PREDICT POSITION =====
+-- ===== PREDICT POSITION (IMPROVED FOR FAST TARGETS) =====
 local function predictPosition(targetPart, player)
     if not targetPart or not targetPart.Parent then
         return targetPart and targetPart.Position or Vector3.new(0, 0, 0)
@@ -527,24 +663,54 @@ local function predictPosition(targetPart, player)
     local cameraPos = Camera.CFrame.Position
     local distance = (basePosition - cameraPos).Magnitude
     local bulletVelocity = config.bulletVelocity or WEAPON_SETTINGS.Velocity
-    local bulletTravelTime = math.clamp(distance / bulletVelocity, 0.01, 3)
     local pingComp = autoCalc.ping or 0.05
+    
+    local bulletTravelTime = math.clamp(distance / bulletVelocity, 0.01, 5)
     
     if config.autoPrediction and targetVelocities[player] then
         local velocity = targetVelocities[player]
         if velocity and velocity.Magnitude > 1 then
+            local targetSpeed = velocity.Magnitude
+            local toTarget = (basePosition - cameraPos).Unit
+            local angle = math.acos(math.clamp(toTarget:Dot(velocity.Unit), -1, 1))
+            local perpendicularFactor = math.abs(math.sin(angle))
             local leadTime = bulletTravelTime * config.prediction + pingComp
-            local speedMult = math.min(velocity.Magnitude / 30, 2)
-            leadTime = leadTime * (1 + speedMult * 0.3)
+            
+            local speedMultiplier = math.min(targetSpeed / 20, 5)
+            leadTime = leadTime * (1 + speedMultiplier * 0.5)
+            
+            if perpendicularFactor > 0.5 then
+                leadTime = leadTime * (1 + perpendicularFactor * 0.3)
+            end
+            
             basePosition = basePosition + (velocity * leadTime)
+            
+            if config.debugMode then
+                print(string.format("Target: %s | Speed: %.1f | Lead: %.3f | Angle: %.1f°", 
+                    player.Name, targetSpeed, leadTime, math.deg(angle)))
+            end
         end
     end
     
     if config.bulletDrop > 0 then
         local predDist = (basePosition - cameraPos).Magnitude
-        local travelTime = math.clamp(predDist / bulletVelocity, 0.01, 3)
+        local travelTime = math.clamp(predDist / bulletVelocity, 0.01, 5)
+        
         local drop = 0.5 * config.bulletDrop * travelTime * travelTime
         drop = drop * config.gravityCompensation
+        
+        if predDist > 300 then
+            local longRangeMultiplier = 1 + (predDist - 300) / 500
+            drop = drop * math.min(longRangeMultiplier, 3)
+        end
+        
+        local heightDiff = basePosition.Y - cameraPos.Y
+        if heightDiff > 0 then
+            drop = drop * (1 + heightDiff / 50)
+        elseif heightDiff < -20 then
+            drop = drop * (1 + heightDiff / 100)
+        end
+        
         basePosition = basePosition + Vector3.new(0, drop, 0)
     end
     
@@ -671,6 +837,209 @@ local function updateFOVPosition()
     if centerDot then centerDot.Position = UDim2.new(0, mousePos.X, 0, mousePos.Y) end
 end
 
+-- ===== ESP FUNCTIONS =====
+local function isPlayerBehindWall(player)
+    if not player or not player.Character then return false end
+    
+    local targetPart = getTargetPart(player)
+    if not targetPart then return false end
+    
+    local origin = Camera.CFrame.Position
+    local direction = (targetPart.Position - origin).Unit
+    local distance = (targetPart.Position - origin).Magnitude
+    
+    local rayParams = RaycastParams.new()
+    rayParams.FilterDescendantsInstances = {plr.Character}
+    rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+    rayParams.IgnoreWater = true
+    
+    local result = Workspace:Raycast(origin, direction * distance, rayParams)
+    
+    if result and result.Instance then
+        local hitPlayer = getPlayerFromPart(result.Instance)
+        if hitPlayer == player then
+            return false
+        end
+        
+        local character = result.Instance.Parent
+        while character do
+            if character == player.Character then
+                return false
+            end
+            character = character.Parent
+        end
+        
+        return true
+    end
+    
+    return false
+end
+
+local function getTeamColor(player)
+    if player.Team then
+        return player.Team.TeamColor.Color
+    end
+    return Color3.fromRGB(255, 255, 255)
+end
+
+local function updateESP()
+    if not config.espEnabled then return end
+    
+    -- Clean up ESP objects for players that no longer exist
+    for player, data in pairs(espObjects) do
+        if not player or not player.Parent or player == plr then
+            if data.outline then pcall(function() data.outline:Destroy() end) end
+            if data.nameLabel then pcall(function() data.nameLabel:Destroy() end) end
+            if data.distanceLabel then pcall(function() data.distanceLabel:Destroy() end) end
+            if data.connection then pcall(function() data.connection:Disconnect() end) end
+            espObjects[player] = nil
+        end
+    end
+    
+    -- Create/update ESP for eligible players
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= plr and player.Character and player.Character.Parent then
+            if config.espTeamCheck and player.Team == plr.Team then
+                if espObjects[player] then
+                    if espObjects[player].outline then pcall(function() espObjects[player].outline:Destroy() end) end
+                    if espObjects[player].nameLabel then pcall(function() espObjects[player].nameLabel:Destroy() end) end
+                    if espObjects[player].distanceLabel then pcall(function() espObjects[player].distanceLabel:Destroy() end) end
+                    if espObjects[player].connection then pcall(function() espObjects[player].connection:Disconnect() end) end
+                    espObjects[player] = nil
+                end
+                continue
+            end
+            
+            local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
+            if humanoid and humanoid.Health > 0 then
+                local targetPart = getTargetPart(player)
+                if targetPart then
+                    local isBehindWall = isPlayerBehindWall(player)
+                    
+                    local outlineColor = config.espOutlineColor
+                    if config.espUseTeamColor then
+                        local teamColor = getTeamColor(player)
+                        if isBehindWall and config.espOutlineEnabled then
+                            local h, s, v = Color3.toHSV(teamColor)
+                            outlineColor = Color3.fromHSV(config.espWallHue or 0.75, s, v)
+                        else
+                            outlineColor = teamColor
+                        end
+                    elseif isBehindWall and config.espOutlineEnabled then
+                        outlineColor = config.espWallColor
+                    end
+                    
+                    if not espObjects[player] then
+                        espObjects[player] = {}
+                    end
+                    
+                    local espData = espObjects[player]
+                    
+                    -- Outline
+                    if config.espOutlineEnabled then
+                        if not espData.outline then
+                            local highlight = Instance.new("Highlight")
+                            highlight.Adornee = player.Character
+                            highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                            highlight.FillTransparency = 1
+                            highlight.OutlineTransparency = 0
+                            highlight.OutlineColor = outlineColor
+                            highlight.Parent = player.Character
+                            espData.outline = highlight
+                        else
+                            espData.outline.OutlineColor = outlineColor
+                            espData.outline.Adornee = player.Character
+                        end
+                    else
+                        if espData.outline then
+                            pcall(function() espData.outline:Destroy() end)
+                            espData.outline = nil
+                        end
+                    end
+                    
+                    -- Name Label
+                    if config.espNameEnabled then
+                        local headPart = player.Character:FindFirstChild("Head") or targetPart
+                        if headPart then
+                            if not espData.nameLabel then
+                                local billboard = Instance.new("BillboardGui")
+                                billboard.Adornee = headPart
+                                billboard.Size = UDim2.new(0, 200, 0, 30)
+                                billboard.StudsOffset = Vector3.new(0, 2.5, 0)
+                                billboard.AlwaysOnTop = true
+                                billboard.Parent = headPart
+                                
+                                local nameLabel = Instance.new("TextLabel")
+                                nameLabel.Size = UDim2.new(1, 0, 1, 0)
+                                nameLabel.BackgroundTransparency = 1
+                                nameLabel.TextColor3 = outlineColor
+                                nameLabel.Text = player.Name
+                                nameLabel.TextSize = 16
+                                nameLabel.Font = Enum.Font.SourceSansBold
+                                nameLabel.TextStrokeTransparency = 0.5
+                                nameLabel.Parent = billboard
+                                
+                                espData.nameLabel = billboard
+                                espData.nameText = nameLabel
+                            else
+                                espData.nameText.TextColor3 = outlineColor
+                                espData.nameLabel.Adornee = headPart
+                            end
+                            
+                            -- Distance Label
+                            if config.espShowDistance then
+                                if not espData.distanceLabel then
+                                    local distBillboard = Instance.new("BillboardGui")
+                                    distBillboard.Adornee = headPart
+                                    distBillboard.Size = UDim2.new(0, 100, 0, 20)
+                                    distBillboard.StudsOffset = Vector3.new(0, 1.5, 0)
+                                    distBillboard.AlwaysOnTop = true
+                                    distBillboard.Parent = headPart
+                                    
+                                    local distLabel = Instance.new("TextLabel")
+                                    distLabel.Size = UDim2.new(1, 0, 1, 0)
+                                    distLabel.BackgroundTransparency = 1
+                                    distLabel.TextColor3 = outlineColor
+                                    distLabel.TextSize = 12
+                                    distLabel.Font = Enum.Font.SourceSans
+                                    distLabel.TextStrokeTransparency = 0.5
+                                    distLabel.Parent = distBillboard
+                                    
+                                    espData.distanceLabel = distBillboard
+                                    espData.distText = distLabel
+                                else
+                                    espData.distText.TextColor3 = outlineColor
+                                    espData.distanceLabel.Adornee = headPart
+                                end
+                                
+                                local distance = (headPart.Position - Camera.CFrame.Position).Magnitude
+                                espData.distText.Text = string.format("%.0f studs", distance)
+                            else
+                                if espData.distanceLabel then
+                                    pcall(function() espData.distanceLabel:Destroy() end)
+                                    espData.distanceLabel = nil
+                                    espData.distText = nil
+                                end
+                            end
+                        end
+                    else
+                        if espData.nameLabel then
+                            pcall(function() espData.nameLabel:Destroy() end)
+                            espData.nameLabel = nil
+                            espData.nameText = nil
+                        end
+                        if espData.distanceLabel then
+                            pcall(function() espData.distanceLabel:Destroy() end)
+                            espData.distanceLabel = nil
+                            espData.distText = nil
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
 -- ===== CREATE UI =====
 local Window = Library:CreateWindow({
     Title = "Silent Aim",
@@ -678,13 +1047,14 @@ local Window = Library:CreateWindow({
     AutoShow = true,
     Resizable = true,
     ShowCustomCursor = true,
-    ToggleKey = Enum.KeyCode.RightShift,
+    ToggleKey = Enum.KeyCode[config.guiToggleKey] or Enum.KeyCode.RightShift,
 })
 
 local MainTab = Window:AddTab("Main")
 local PredictionTab = Window:AddTab("Prediction")
 local HitboxTab = Window:AddTab("Hitbox")
 local ChantTab = Window:AddTab("Chant")
+local ESPTab = Window:AddTab("ESP")
 local SettingsTab = Window:AddTab("Settings")
 
 -- ===== MAIN TAB =====
@@ -789,11 +1159,42 @@ PredictionGroup:AddSlider("DropCompensation", {
     Text = "Drop Compensation",
     Default = config.gravityCompensation,
     Min = 0.5,
-    Max = 1.5,
+    Max = 3.0,
     Rounding = 2,
     Callback = function(v)
         config.gravityCompensation = v
         autoCalc.calibrationValues.gravityCompensation.current = v
+    end
+})
+
+PredictionGroup:AddSlider("LongRangeCompensation", {
+    Text = "Long Range Drop Bonus",
+    Default = config.longRangeCompensation,
+    Min = 0.5,
+    Max = 3.0,
+    Rounding = 2,
+    Callback = function(v)
+        config.longRangeCompensation = v
+    end
+})
+
+PredictionGroup:AddSlider("MountedLeadMultiplier", {
+    Text = "Mounted Lead Multiplier",
+    Default = config.mountedLeadMultiplier,
+    Min = 0.5,
+    Max = 4.0,
+    Rounding = 2,
+    Callback = function(v)
+        config.mountedLeadMultiplier = v
+    end
+})
+
+PredictionGroup:AddToggle("DebugMode", {
+    Text = "Debug Mode",
+    Default = config.debugMode,
+    Callback = function(v)
+        config.debugMode = v
+        print("Debug mode: " .. (v and "ON" or "OFF"))
     end
 })
 
@@ -924,13 +1325,115 @@ ChantGroup:AddButton({
     end
 })
 
+-- ===== ESP TAB =====
+local ESPGroup = ESPTab:AddLeftGroupbox("ESP Settings")
+
+ESPGroup:AddToggle("ESPEnabled", {
+    Text = "ESP Enabled",
+    Default = config.espEnabled,
+    Callback = function(v)
+        config.espEnabled = v
+        if not v then
+            for player, data in pairs(espObjects) do
+                if data.outline then pcall(function() data.outline:Destroy() end) end
+                if data.nameLabel then pcall(function() data.nameLabel:Destroy() end) end
+                if data.distanceLabel then pcall(function() data.distanceLabel:Destroy() end) end
+                if data.connection then pcall(function() data.connection:Disconnect() end) end
+            end
+            espObjects = {}
+        end
+    end
+})
+
+ESPGroup:AddToggle("ESPTeamCheck", {
+    Text = "Team Check",
+    Default = config.espTeamCheck,
+    Callback = function(v) config.espTeamCheck = v end
+})
+
+ESPGroup:AddDivider()
+ESPGroup:AddLabel("Outline Settings")
+
+ESPGroup:AddToggle("ESPOutlineEnabled", {
+    Text = "Enable Outline",
+    Default = config.espOutlineEnabled,
+    Callback = function(v) config.espOutlineEnabled = v end
+})
+
+local outlineColorLabel = ESPGroup:AddLabel("Outline Color")
+outlineColorLabel:AddColorPicker("ESPOutlineColor", {
+    Default = config.espOutlineColor,
+    Callback = function(v)
+        config.espOutlineColor = v
+    end
+})
+
+ESPGroup:AddToggle("ESPUseTeamColor", {
+    Text = "Use Team Color",
+    Default = config.espUseTeamColor,
+    Callback = function(v) config.espUseTeamColor = v end
+})
+
+local wallColorLabel = ESPGroup:AddLabel("Wall Color (Behind Wall)")
+wallColorLabel:AddColorPicker("ESPWallColor", {
+    Default = config.espWallColor,
+    Callback = function(v)
+        config.espWallColor = v
+    end
+})
+
+ESPGroup:AddSlider("ESPWallHue", {
+    Text = "Wall Hue (Purple Tint)",
+    Default = config.espWallHue,
+    Min = 0,
+    Max = 1,
+    Rounding = 2,
+    Callback = function(v)
+        config.espWallHue = v
+    end
+})
+
+ESPGroup:AddDivider()
+ESPGroup:AddLabel("Name & Distance")
+
+ESPGroup:AddToggle("ESPNameEnabled", {
+    Text = "Show Player Names",
+    Default = config.espNameEnabled,
+    Callback = function(v) config.espNameEnabled = v end
+})
+
+ESPGroup:AddToggle("ESPShowDistance", {
+    Text = "Show Distance",
+    Default = config.espShowDistance,
+    Callback = function(v) config.espShowDistance = v end
+})
+
+ESPGroup:AddButton({
+    Text = "Refresh ESP",
+    Func = function()
+        if config.espEnabled then
+            for player, data in pairs(espObjects) do
+                if data.outline then pcall(function() data.outline:Destroy() end) end
+                if data.nameLabel then pcall(function() data.nameLabel:Destroy() end) end
+                if data.distanceLabel then pcall(function() data.distanceLabel:Destroy() end) end
+                if data.connection then pcall(function() data.connection:Disconnect() end) end
+            end
+            espObjects = {}
+            updateESP()
+            print("ESP refreshed!")
+        else
+            print("ESP is disabled. Enable it first.")
+        end
+    end
+})
+
 -- ===== SETTINGS TAB =====
 local SettingsGroup = SettingsTab:AddLeftGroupbox("Keybinds")
 
-local keyLabel = SettingsGroup:AddLabel("Toggle Key")
-keyLabel:AddKeyPicker("ToggleKey", {
-    Text = "Toggle Key",
-    Default = "Delete",
+local toggleKeyLabel = SettingsGroup:AddLabel("Toggle Silent Aim")
+toggleKeyLabel:AddKeyPicker("ToggleKey", {
+    Text = "Toggle Silent Aim",
+    Default = config.toggleKey,
     Mode = "Toggle",
     ChangedCallback = function(v)
         config.toggleKey = v
@@ -941,9 +1444,23 @@ keyLabel:AddKeyPicker("ToggleKey", {
             if gameProcessed then return end
             if input.KeyCode == Enum.KeyCode[v] then
                 config.enabled = not config.enabled
+                if Toggles and Toggles.Enabled then
+                    Toggles.Enabled:SetValue(config.enabled)
+                end
                 if fovCircle then fovCircle.Enabled = config.showFOV and config.enabled end
             end
         end)
+    end
+})
+
+local guiKeyLabel = SettingsGroup:AddLabel("Toggle GUI")
+guiKeyLabel:AddKeyPicker("GUIToggleKey", {
+    Text = "Toggle GUI",
+    Default = config.guiToggleKey,
+    Mode = "Toggle",
+    ChangedCallback = function(v)
+        config.guiToggleKey = v
+        Window:SetToggleKey(Enum.KeyCode[v])
     end
 })
 
@@ -991,6 +1508,9 @@ connections.toggleKeybind = UserInputService.InputBegan:Connect(function(input, 
     if gameProcessed then return end
     if input.KeyCode == Enum.KeyCode[config.toggleKey] then
         config.enabled = not config.enabled
+        if Toggles and Toggles.Enabled then
+            Toggles.Enabled:SetValue(config.enabled)
+        end
         if fovCircle then fovCircle.Enabled = config.showFOV and config.enabled end
     end
 end)
@@ -1003,6 +1523,13 @@ if config.hitboxEnabled then
     hookFastCastRedux()
     hookHitRemote()
 end
+
+-- Start ESP update loop
+connections.espUpdate = RunService.Heartbeat:Connect(function()
+    if config.espEnabled then
+        pcall(updateESP)
+    end
+end)
 
 connections.renderStepped = RunService.RenderStepped:Connect(function()
     pcall(onRenderStepped)
@@ -1048,9 +1575,15 @@ Players.PlayerRemoving:Connect(function(player)
     if playerHitboxes[player] then
         removeHitboxForPlayer(player)
     end
+    if espObjects[player] then
+        if espObjects[player].outline then pcall(function() espObjects[player].outline:Destroy() end) end
+        if espObjects[player].nameLabel then pcall(function() espObjects[player].nameLabel:Destroy() end) end
+        if espObjects[player].distanceLabel then pcall(function() espObjects[player].distanceLabel:Destroy() end) end
+        if espObjects[player].connection then pcall(function() espObjects[player].connection:Disconnect() end) end
+        espObjects[player] = nil
+    end
 end)
 
--- Initialize chant
 task.wait(0.5)
 initChantPackage()
 
@@ -1060,6 +1593,6 @@ print("  Velocity: " .. WEAPON_SETTINGS.Velocity .. " studs/s")
 print("  Deviation: ±" .. WEAPON_SETTINGS.VelocityDeviation)
 print("  Damage: " .. WEAPON_SETTINGS.BaseDamage .. "-" .. WEAPON_SETTINGS.MinDamage)
 print("  Range: " .. WEAPON_SETTINGS.BaseDmgDistance .. "-" .. WEAPON_SETTINGS.MinDmgDistance .. " studs")
-print("Press " .. config.toggleKey .. " to toggle")
-print("Press RightShift to toggle menu")
+print("Press " .. config.toggleKey .. " to toggle silent aim")
+print("Press " .. config.guiToggleKey .. " to toggle GUI")
 print("Click 'Unload Script' in the Settings tab to fully unload")
