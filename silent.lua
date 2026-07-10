@@ -869,6 +869,16 @@ local function updateESPColors()
     espSettings.tracer.fill = config.espTracerColor
 end
 
+local function refreshESPForPlayer(player)
+    if not player or player == plr then return
+    if espEnabledPlayers[player] then
+        removeESPForPlayer(player)
+    end
+    if config.espEnabled then
+        setupESPForPlayer(player)
+    end
+end
+
 local function setupESPForPlayer(player)
     if player == plr then return end
     if espEnabledPlayers[player] then return end
@@ -885,6 +895,9 @@ local function setupESPForPlayer(player)
     
     local character = player.Character
     if not character then return end
+    
+    -- Update global esp-lib settings before adding
+    updateESPColors()
     
     if config.espBoxEnabled then
         esplib.add_box(character)
@@ -912,6 +925,7 @@ local function setupESPForPlayer(player)
         espObjects[player].connection = player.CharacterAdded:Connect(function(newCharacter)
             task.wait(0.5)
             if shouldShowESP() then
+                updateESPColors()
                 if config.espBoxEnabled then
                     esplib.add_box(newCharacter)
                 end
@@ -947,6 +961,10 @@ local function removeESPForPlayer(player)
 end
 
 local function updateAllESP()
+    -- First update the global esp-lib settings
+    updateESPColors()
+    
+    -- Remove ESP for players that no longer exist or are dead
     for player, _ in pairs(espEnabledPlayers) do
         if not player or not player.Parent or player == plr then
             removeESPForPlayer(player)
@@ -970,6 +988,7 @@ local function updateAllESP()
         end
     end
     
+    -- Add ESP for eligible players
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= plr and player.Character and player.Character.Parent then
             if config.espTeamCheck and player.Team == plr.Team then
@@ -1199,6 +1218,11 @@ ESPGroup:AddToggle("ESPBoxEnabled", {
         config.espBoxEnabled = v
         getgenv().esplib.box.enabled = v
         if config.espEnabled then
+            -- Refresh ESP for all players
+            for player, _ in pairs(espEnabledPlayers) do
+                removeESPForPlayer(player)
+            end
+            espEnabledPlayers = {}
             updateAllESP()
         end
     end
@@ -1211,6 +1235,10 @@ ESPGroup:AddToggle("ESPHealthbarEnabled", {
         config.espHealthbarEnabled = v
         getgenv().esplib.healthbar.enabled = v
         if config.espEnabled then
+            for player, _ in pairs(espEnabledPlayers) do
+                removeESPForPlayer(player)
+            end
+            espEnabledPlayers = {}
             updateAllESP()
         end
     end
@@ -1223,6 +1251,10 @@ ESPGroup:AddToggle("ESPNameEnabled", {
         config.espNameEnabled = v
         getgenv().esplib.name.enabled = v
         if config.espEnabled then
+            for player, _ in pairs(espEnabledPlayers) do
+                removeESPForPlayer(player)
+            end
+            espEnabledPlayers = {}
             updateAllESP()
         end
     end
@@ -1235,6 +1267,10 @@ ESPGroup:AddToggle("ESPDistanceEnabled", {
         config.espDistanceEnabled = v
         getgenv().esplib.distance.enabled = v
         if config.espEnabled then
+            for player, _ in pairs(espEnabledPlayers) do
+                removeESPForPlayer(player)
+            end
+            espEnabledPlayers = {}
             updateAllESP()
         end
     end
@@ -1247,6 +1283,10 @@ ESPGroup:AddToggle("ESPTracerEnabled", {
         config.espTracerEnabled = v
         getgenv().esplib.tracer.enabled = v
         if config.espEnabled then
+            for player, _ in pairs(espEnabledPlayers) do
+                removeESPForPlayer(player)
+            end
+            espEnabledPlayers = {}
             updateAllESP()
         end
     end
