@@ -466,85 +466,6 @@ local function getPlayerFromPart(part)
     return nil
 end
 
--- ===== HITBOX EXTENDER FUNCTIONS (REORDERED) =====
--- Remove hitbox function FIRST so it's defined before createHitboxForPlayer
-local function removeHitboxForPlayer(player)
-    if playerHitboxes[player] then
-        if playerHitboxes[player].hitbox then
-            pcall(function() playerHitboxes[player].hitbox:Destroy() end)
-        end
-        if playerHitboxes[player].connection then
-            pcall(function() playerHitboxes[player].connection:Disconnect() end)
-        end
-        playerHitboxes[player] = nil
-        print("Removed hitbox for: " .. player.Name)
-    end
-end
-
-local function createHitboxForPlayer(player)
-    if not player or not player.Character then return end
-    removeHitboxForPlayer(player)
-    local targetPart = getTargetPart(player)
-    if not targetPart then 
-        print("No target part found for: " .. player.Name)
-        return 
-    end
-    
-    local hitbox = Instance.new("Part")
-    hitbox.Name = "ExtendedHitbox"
-    hitbox.Anchored = false
-    hitbox.CanCollide = false  -- COLLISION OFF
-    hitbox.Massless = true
-    hitbox.Transparency = config.hitboxTransparency or 0.5
-    hitbox.Color = config.hitboxColor or Color3.fromRGB(255, 0, 0)
-    hitbox.Material = Enum.Material.Neon
-    hitbox.Size = targetPart.Size * (config.hitboxSize or 1.5)
-    
-    local weld = Instance.new("Weld")
-    weld.Part0 = targetPart
-    weld.Part1 = hitbox
-    weld.C0 = CFrame.new(0, 0, 0)
-    weld.Parent = hitbox
-    hitbox.Parent = player.Character
-    
-    local connection = hitbox.Touched:Connect(function(hit)
-        if hit and hit.Parent then
-            local isBullet = hit.Name:match("Bullet") or hit.Name:match("Projectile")
-            if isBullet then
-                local velocity = Vector3.new(0, 0, 0)
-                local velProp = hit:FindFirstChild("Velocity")
-                if velProp then
-                    if type(velProp.Value) == "Vector3" then
-                        velocity = velProp.Value
-                    elseif type(velProp.Value) == "number" then
-                        local dir = (hit.Position - hit.Parent.Position).Unit
-                        velocity = dir * velProp.Value
-                    end
-                end
-                fireHitRemote(player, velocity)
-            end
-        end
-    end)
-    
-    playerHitboxes[player] = { hitbox = hitbox, weld = weld, targetPart = targetPart, connection = connection }
-    print("Created hitbox for: " .. player.Name)
-end
-
-local function updateAllHitboxes()
-    for player, _ in pairs(playerHitboxes) do
-        if not player or not player.Parent or not shouldExtendHitbox(player) then
-            removeHitboxForPlayer(player)
-        end
-    end
-    if config.hitboxEnabled then
-        for _, player in ipairs(Players:GetPlayers()) do
-            if shouldExtendHitbox(player) and not playerHitboxes[player] then
-                createHitboxForPlayer(player)
-            end
-        end
-    end
-end
-
 -- ===== HITBOX EXPANSION CORE FUNCTIONS =====
 local function resetHRP(hrp)
     if not hrp then return end
@@ -633,7 +554,7 @@ local function applyHitboxExpansion(player)
         hrp.Transparency = config.hitboxTransparency
         hrp.BrickColor = BrickColor.new("Dark Red")
         hrp.Material = Enum.Material.Neon
-        hrp.CanCollide = false  -- COLLISION OFF
+        hrp.CanCollide = true
     end)
     
     Expanded[player] = true
@@ -834,6 +755,84 @@ local function hookHitRemote()
     end
     print("Hit remote hooked!")
     return true
+end
+
+-- ===== HITBOX EXTENDER (LEGACY - KEPT FOR COMPATIBILITY) =====
+local function createHitboxForPlayer(player)
+    if not player or not player.Character then return end
+    removeHitboxForPlayer(player)
+    local targetPart = getTargetPart(player)
+    if not targetPart then 
+        print("No target part found for: " .. player.Name)
+        return 
+    end
+    
+    local hitbox = Instance.new("Part")
+    hitbox.Name = "ExtendedHitbox"
+    hitbox.Anchored = false
+    hitbox.CanCollide = true
+    hitbox.Massless = true
+    hitbox.Transparency = config.hitboxTransparency or 0.5
+    hitbox.Color = config.hitboxColor or Color3.fromRGB(255, 0, 0)
+    hitbox.Material = Enum.Material.Neon
+    hitbox.Size = targetPart.Size * (config.hitboxSize or 1.5)
+    
+    local weld = Instance.new("Weld")
+    weld.Part0 = targetPart
+    weld.Part1 = hitbox
+    weld.C0 = CFrame.new(0, 0, 0)
+    weld.Parent = hitbox
+    hitbox.Parent = player.Character
+    
+    local connection = hitbox.Touched:Connect(function(hit)
+        if hit and hit.Parent then
+            local isBullet = hit.Name:match("Bullet") or hit.Name:match("Projectile")
+            if isBullet then
+                local velocity = Vector3.new(0, 0, 0)
+                local velProp = hit:FindFirstChild("Velocity")
+                if velProp then
+                    if type(velProp.Value) == "Vector3" then
+                        velocity = velProp.Value
+                    elseif type(velProp.Value) == "number" then
+                        local dir = (hit.Position - hit.Parent.Position).Unit
+                        velocity = dir * velProp.Value
+                    end
+                end
+                fireHitRemote(player, velocity)
+            end
+        end
+    end)
+    
+    playerHitboxes[player] = { hitbox = hitbox, weld = weld, targetPart = targetPart, connection = connection }
+    print("Created hitbox for: " .. player.Name)
+end
+
+local function removeHitboxForPlayer(player)
+    if playerHitboxes[player] then
+        if playerHitboxes[player].hitbox then
+            pcall(function() playerHitboxes[player].hitbox:Destroy() end)
+        end
+        if playerHitboxes[player].connection then
+            pcall(function() playerHitboxes[player].connection:Disconnect() end)
+        end
+        playerHitboxes[player] = nil
+        print("Removed hitbox for: " .. player.Name)
+    end
+end
+
+local function updateAllHitboxes()
+    for player, _ in pairs(playerHitboxes) do
+        if not player or not player.Parent or not shouldExtendHitbox(player) then
+            removeHitboxForPlayer(player)
+        end
+    end
+    if config.hitboxEnabled then
+        for _, player in ipairs(Players:GetPlayers()) do
+            if shouldExtendHitbox(player) and not playerHitboxes[player] then
+                createHitboxForPlayer(player)
+            end
+        end
+    end
 end
 
 -- ===== FIND HIT REMOTE =====
@@ -1590,13 +1589,6 @@ local function setupPlayerRespawnHandler(player)
             if espData.tracer then pcall(function() espData.tracer:Remove() end) end
             espObjects[player] = nil
         end
-        -- Clean up hitbox expansion when character is removed
-        if Expanded[player] then
-            Expanded[player] = nil
-        end
-        if playerHitboxes[player] then
-            removeHitboxForPlayer(player)
-        end
         if charRemovingConn then
             charRemovingConn:Disconnect()
         end
@@ -1614,8 +1606,6 @@ local function setupPlayerRespawnHandler(player)
         if config.hitboxEnabled then
             task.wait(0.5)
             if shouldExtendHitbox(player) then
-                -- Apply both expansion and legacy hitbox on respawn
-                applyHitboxExpansion(player)
                 createHitboxForPlayer(player)
             end
         end
@@ -2045,7 +2035,7 @@ HitboxGroup:AddSlider("HitboxSize", {
     Default = config.hitboxSize,
     Min = 0.5,
     Max = 50,
-    Rounding = 1,  -- Small increments (0.1)
+    Rounding = 1,
     Callback = function(v)
         config.hitboxSize = v
         if config.hitboxEnabled then
