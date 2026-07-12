@@ -2351,17 +2351,8 @@ connections.autoRefresh = RunService.RenderStepped:Connect(function()
     if config.hitboxEnabled then
         for _, player in ipairs(Players:GetPlayers()) do
             if player ~= plr and player.Character then
-                local hrp = player.Character:FindFirstChild("HumanoidRootPart")
-                if hrp and Expanded[player] then
-                    pcall(function()
-                        hrp.Size = Vector3.new(config.hitboxSize, config.hitboxSize, config.hitboxSize)
-                        hrp.Transparency = config.hitboxTransparency
-                        hrp.BrickColor = BrickColor.new(config.hitboxColor)
-                        hrp.Material = Enum.Material.Neon
-                        hrp.CanCollide = false
-                        hrp.CanQuery = true
-                    end)
-                end
+                resetAllExpanded()
+                applyHitboxToAllPlayers()
             end
         end
     end
