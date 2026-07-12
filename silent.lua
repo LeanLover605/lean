@@ -680,212 +680,161 @@ do
     end)
 end
 
--- ===== BULLET TRACER SYSTEM (REWRITTEN WITH BEAMS) =====
-local beamTraces = {}  -- Store active beams
+-- ===== FASTCAST BULLET TRACER (Optimized for Potassium Executor) =====
+local TracerColor = Color3.fromRGB(0, 255, 128)  -- Lime Green
+local TracerThickness = 0.1
+local FadeTime = 0.2
 
-local function createBeamTracer(startPos, endPos)
-    if not config.bulletTracerEnabled then return end
+local TweenService = game:GetService("TweenService")
+local Debris = game:GetService("Debris")
+local RunService = game:GetService("RunService")
+
+local tracerHooked = false
+local activeTracers = {}
+
+-- ===== CREATE BULLET SEGMENT =====
+local function CreateBulletSegment(startPoint, endPoint)
+    if not startPoint or not endPoint then return end
     
-    -- Get the gun muzzle position (approximate from camera)
-    local origin = startPos or Camera.CFrame.Position + Camera.CFrame.LookVector * 2
+    local distance = (startPoint - endPoint).Magnitude
+    if distance < 0.1 or distance > 1000 then return end
+
+    local segment = Instance.new("Part")
+    segment.Name = "FastCastTracer"
+    segment.Anchored = true
+    segment.CanCollide = false
+    segment.CanTouch = false
+    segment.CanQuery = false
+    segment.Material = Enum.Material.Neon
+    segment.Color = TracerColor
+    segment.Transparency = 0.2
+    segment.Size = Vector3.new(TracerThickness, TracerThickness, distance)
     
-    -- Create a part for the tracer
-    local tracer = Instance.new("Part")
-    tracer.Name = "BulletTracer"
-    tracer.Anchored = true
-    tracer.CanCollide = false
-    tracer.CanQuery = false
-    tracer.Transparency = 0.3
-    tracer.Color = config.bulletTracerColor
-    tracer.Material = Enum.Material.Neon
-    tracer.Size = Vector3.new(0.2, 0.2, (endPos - origin).Magnitude)
-    tracer.CFrame = CFrame.lookAt(origin, endPos) * CFrame.new(0, 0, -tracer.Size.Z / 2)
-    tracer.Parent = workspace
-    
-    -- Add a trail effect
-    local attachment0 = Instance.new("Attachment")
-    attachment0.Parent = tracer
-    attachment0.Position = Vector3.new(0, 0, -tracer.Size.Z / 2)
-    
-    local attachment1 = Instance.new("Attachment")
-    attachment1.Parent = tracer
-    attachment1.Position = Vector3.new(0, 0, tracer.Size.Z / 2)
-    
-    local trail = Instance.new("Trail")
-    trail.Parent = tracer
-    trail.Attachment0 = attachment0
-    trail.Attachment1 = attachment1
-    trail.Lifetime = 0.1
-    trail.MinLength = 0.1
-    trail.Transparency = NumberSequence.new({
-        NumberSequenceKeypoint.new(0, 0.8),
-        NumberSequenceKeypoint.new(1, 0.2)
+    -- Align part exactly along the directional arc vector
+    segment.CFrame = CFrame.lookAt(startPoint, endPoint) * CFrame.new(0, 0, -distance / 2)
+    segment.Parent = workspace
+
+    -- Smooth linear opacity dissolve
+    local fadeTween = TweenService:Create(segment, TweenInfo.new(FadeTime, Enum.EasingStyle.Linear), {
+        Transparency = 1,
+        Size = Vector3.new(0, 0, distance)
     })
-    trail.Color = ColorSequence.new(config.bulletTracerColor)
-    trail.Enabled = true
     
-    -- Store the tracer data
-    local traceData = {
-        part = tracer,
-        trail = trail,
-        startPos = origin,
-        endPos = endPos,
-        startTime = tick(),
-        duration = config.bulletTracerDuration,
-    }
+    fadeTween:Play()
+    Debris:AddItem(segment, FadeTime + 0.05)
     
-    table.insert(beamTraces, traceData)
+    table.insert(activeTracers, segment)
+end
+
+-- ===== INJECT LISTENER INTO FASTCAST SIGNAL TABLES =====
+local function InterceptFastCastObject(tableObj)
+    if typeof(tableObj) ~= "table" then return false end
     
-    -- Auto-remove after duration
-    task.spawn(function()
-        task.wait(config.bulletTracerDuration)
-        for i, data in pairs(beamTraces) do
-            if data == traceData then
-                if data.part then
-                    pcall(function() data.part:Destroy() end)
+    -- Target the LengthChanged signal which contains bullet step positions
+    if tableObj.LengthChanged and typeof(tableObj.LengthChanged) == "table" and tableObj.LengthChanged.Connect then
+        -- Check if already hooked
+        if tableObj._tracerHooked then return false end
+        tableObj._tracerHooked = true
+        
+        tableObj.LengthChanged:Connect(function(cast, lastPoint, rayDir, displacement)
+            -- Multiplied directional vectors provide the true path calculation
+            local tipPoint = lastPoint + (rayDir * displacement)
+            task.spawn(CreateBulletSegment, lastPoint, tipPoint)
+        end)
+        
+        print("[FastCast Tracer] Hooked FastCast caster!")
+        return true
+    end
+    
+    return false
+end
+
+-- ===== SCAN GARBAGE COLLECTOR FOR ACTIVE FASTCAST INSTANCES =====
+local function InitializeGCScan()
+    print("[FastCast Tracer] Scanning garbage collector for FastCast casters...")
+    
+    local hookedCount = 0
+    
+    -- Gathers true Upvalues and Active Registry tables
+    for _, registryObject in ipairs(getgc(true)) do
+        if typeof(registryObject) == "table" then
+            -- Check for FastCast caster signature
+            if registryObject.LengthChanged and registryObject.Fire then
+                if InterceptFastCastObject(registryObject) then
+                    hookedCount = hookedCount + 1
                 end
-                beamTraces[i] = nil
-                break
             end
+        end
+    end
+    
+    if hookedCount > 0 then
+        tracerHooked = true
+        print("[FastCast Tracer] Successfully hooked " .. hookedCount .. " FastCast caster(s)!")
+    else
+        print("[FastCast Tracer] No FastCast casters found in GC. Try executing again when a weapon is equipped.")
+    end
+end
+
+-- ===== CONTINUOUS SCAN FOR NEW CASTERS (every few seconds) =====
+local function StartContinuousScan()
+    task.spawn(function()
+        local attempts = 0
+        while attempts < 10 and not tracerHooked do
+            attempts = attempts + 1
+            task.wait(3)
+            InitializeGCScan()
+        end
+        
+        if tracerHooked then
+            print("[FastCast Tracer] Tracers are now active!")
+        else
+            print("[FastCast Tracer] Failed to find FastCast casters after 10 attempts.")
         end
     end)
-    
-    return traceData
 end
 
--- ===== HOOK THE HIT REMOTEEVENT (This actually works) =====
-local function hookHitRemoteForTracers()
-    print("Hooking Hit RemoteEvent for tracers...")
-    
-    local tools = ReplicatedStorage:FindFirstChild("Tools")
-    if tools then
-        local components = tools:FindFirstChild("Components")
-        if components then
-            local muzzle = components:FindFirstChild("Muzzle")
-            if muzzle then
-                local hitRemote = muzzle:FindFirstChild("Hit")
-                if hitRemote and hitRemote:IsA("RemoteEvent") then
-                    print("Found Hit RemoteEvent!")
-                    
-                    -- Store the original FireServer
-                    local originalFireServer = hitRemote.FireServer
-                    
-                    hitRemote.FireServer = function(self, player, velocity, humanoid)
-                        -- This fires when a bullet hits something
-                        if config.bulletTracerEnabled and humanoid and humanoid.Parent then
-                            local char = humanoid.Parent
-                            local targetPart = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso")
-                            if targetPart then
-                                -- Get the shooter's position (from camera)
-                                local origin = Camera.CFrame.Position + Camera.CFrame.LookVector * 2
-                                local hitPoint = targetPart.Position
-                                
-                                -- Create the tracer
-                                createBeamTracer(origin, hitPoint)
-                                print("Tracer created from " .. tostring(origin) .. " to " .. tostring(hitPoint))
-                            end
-                        end
-                        
-                        -- Call the original function
-                        if originalFireServer then
-                            return originalFireServer(self, player, velocity, humanoid)
-                        end
-                    end
-                    
-                    print("Hit RemoteEvent hooked successfully!")
-                    return true
-                end
-            end
-        end
+-- ===== CLEANUP =====
+local function ClearTracers()
+    for _, tracer in ipairs(activeTracers) do
+        pcall(function() tracer:Destroy() end)
     end
-    
-    print("Failed to hook Hit RemoteEvent.")
-    return false
+    activeTracers = {}
+    print("[FastCast Tracer] Cleared all tracers.")
 end
 
--- ===== HOOK FASTCAST WITH BEAMS (Alternative method) =====
-local function hookFastCastWithBeams()
-    print("Attempting to hook FastCast for beam tracers...")
-    
-    local fastCastModule = ReplicatedStorage:FindFirstChild("Tools")
-    if fastCastModule then
-        local components = fastCastModule:FindFirstChild("Components")
-        if components then
-            local muzzle = components:FindFirstChild("Muzzle")
-            if muzzle then
-                local fastCastScript = muzzle:FindFirstChild("FastCastRedux")
-                if fastCastScript and fastCastScript:IsA("ModuleScript") then
-                    local success, fastCast = pcall(function()
-                        return require(fastCastScript)
-                    end)
-                    
-                    if success and fastCast then
-                        -- Try to hook RayHit
-                        if type(fastCast.RayHit) == "function" then
-                            local oldRayHit = fastCast.RayHit
-                            fastCast.RayHit = function(cast, result, velocity, cosmeticBullet)
-                                if config.bulletTracerEnabled and result then
-                                    local origin = cast.Origin or Camera.CFrame.Position + Camera.CFrame.LookVector * 2
-                                    local hitPoint = result.Position or (result.Instance and result.Instance.Position) or origin
-                                    createBeamTracer(origin, hitPoint)
-                                    print("FastCast tracer created!")
-                                end
-                                
-                                if oldRayHit then
-                                    return oldRayHit(cast, result, velocity, cosmeticBullet)
-                                end
-                            end
-                            print("FastCast hooked with beam tracers!")
-                            return true
-                        end
-                    end
-                end
-            end
+-- ===== EXPOSE FUNCTIONS FOR UI =====
+_G.FastCastTracer = {
+    Enable = function()
+        if not tracerHooked then
+            InitializeGCScan()
+            StartContinuousScan()
+        else
+            print("[FastCast Tracer] Already active.")
         end
-    end
-    
-    return false
-end
-
--- ===== CLEANUP BEAM TRACERS =====
-local function clearBeamTracers()
-    for _, data in pairs(beamTraces) do
-        if data.part then
-            pcall(function() data.part:Destroy() end)
+    end,
+    Disable = function()
+        ClearTracers()
+        tracerHooked = false
+        print("[FastCast Tracer] Disabled.")
+    end,
+    SetColor = function(color)
+        TracerColor = color
+        -- Update existing tracers
+        for _, tracer in ipairs(activeTracers) do
+            pcall(function() tracer.Color = color end)
         end
+    end,
+    SetThickness = function(thickness)
+        TracerThickness = thickness
+    end,
+    SetFadeTime = function(time)
+        FadeTime = time
+    end,
+    Clear = ClearTracers,
+    Status = function()
+        return tracerHooked
     end
-    beamTraces = {}
-    print("Beam tracers cleared!")
-end
-
--- ===== UPDATE BEAM TRACERS (Fade out) =====
-local function updateBeamTracers()
-    for i, trace in pairs(beamTraces) do
-        if trace and trace.part then
-            local elapsed = tick() - trace.startTime
-            local alpha = math.max(0, 1 - (elapsed / trace.duration))
-            
-            -- Fade out the part
-            pcall(function()
-                trace.part.Transparency = 0.3 + (1 - alpha) * 0.7
-            end)
-        end
-    end
-    
-    -- Clean up dead traces
-    for i, trace in pairs(beamTraces) do
-        if not trace or not trace.part then
-            beamTraces[i] = nil
-        end
-    end
-end
-
--- ===== BEAM TRACER UPDATE LOOP =====
-connections.beamTracerUpdate = task.spawn(function()
-    while task.wait(0.05) do
-        pcall(updateBeamTracers)
-    end
-end)
+}
 
 -- ===== PING DETECTION =====
 local function detectPing()
@@ -2008,17 +1957,23 @@ local TracersGroup = VisualsTab:AddRightGroupbox("Bullet Tracers")
 
 TracersGroup:AddToggle("BulletTracerEnabled", {
     Text = "Bullet Tracers",
-    Desc = "Show trajectory beams when bullets are fired",
+    Desc = "Show trajectory beams using FastCast LengthChanged",
     Default = config.bulletTracerEnabled,
     Callback = function(v)
         config.bulletTracerEnabled = v
         if v then
-            -- Try both hooking methods
-            hookHitRemoteForTracers()
-            hookFastCastWithBeams()
+            if _G.FastCastTracer then
+                _G.FastCastTracer.Enable()
+            else
+                -- Try to initialize
+                InitializeGCScan()
+                StartContinuousScan()
+            end
             print("Bullet tracers enabled!")
         else
-            clearBeamTracers()
+            if _G.FastCastTracer then
+                _G.FastCastTracer.Disable()
+            end
             print("Bullet tracers disabled!")
         end
     end
@@ -2029,46 +1984,36 @@ tracerColorLabel:AddColorPicker("BulletTracerColor", {
     Default = config.bulletTracerColor,
     Callback = function(v)
         config.bulletTracerColor = v
-        for _, trace in pairs(beamTraces) do
-            if trace.part then
-                pcall(function()
-                    trace.part.Color = v
-                    if trace.trail then
-                        trace.trail.Color = ColorSequence.new(v)
-                    end
-                end)
-            end
+        if _G.FastCastTracer then
+            _G.FastCastTracer.SetColor(v)
         end
     end
 })
 
 TracersGroup:AddSlider("BulletTracerDuration", {
-    Text = "Tracer Duration (Seconds)",
+    Text = "Tracer Fade Time (Seconds)",
     Default = config.bulletTracerDuration,
-    Min = 0.1,
-    Max = 2,
-    Rounding = 1,
+    Min = 0.05,
+    Max = 0.5,
+    Rounding = 2,
     Callback = function(v)
         config.bulletTracerDuration = v
+        if _G.FastCastTracer then
+            _G.FastCastTracer.SetFadeTime(v)
+        end
     end
 })
 
 TracersGroup:AddSlider("BulletTracerThickness", {
     Text = "Tracer Thickness",
     Default = config.bulletTracerThickness,
-    Min = 0.1,
-    Max = 2,
-    Rounding = 1,
+    Min = 0.05,
+    Max = 0.5,
+    Rounding = 2,
     Callback = function(v)
         config.bulletTracerThickness = v
-        -- Update existing tracers
-        for _, trace in pairs(beamTraces) do
-            if trace.part then
-                pcall(function()
-                    local currentSize = trace.part.Size
-                    trace.part.Size = Vector3.new(v, v, currentSize.Z)
-                end)
-            end
+        if _G.FastCastTracer then
+            _G.FastCastTracer.SetThickness(v)
         end
     end
 })
@@ -2076,15 +2021,20 @@ TracersGroup:AddSlider("BulletTracerThickness", {
 TracersGroup:AddButton({
     Text = "Clear Tracers",
     Func = function()
-        clearBeamTracers()
+        if _G.FastCastTracer then
+            _G.FastCastTracer.Clear()
+        else
+            ClearTracers()
+        end
     end
 })
 
 TracersGroup:AddButton({
-    Text = "Force Hook Hit Remote",
+    Text = "Force Scan FastCast",
     Func = function()
-        local success = hookHitRemoteForTracers()
-        print(success and "Hit Remote hooked!" or "Failed to hook Hit Remote")
+        print("Force scanning for FastCast casters...")
+        InitializeGCScan()
+        StartContinuousScan()
     end
 })
 
@@ -2369,6 +2319,14 @@ ThemeManager:ApplyToTab(SettingsTab)
 
 -- ===== INITIALIZATION =====
 createFOVCircle()
+
+InitializeGCScan()
+
+-- Continue scanning for new casters
+StartContinuousScan()
+
+print("[FastCast Tracer] Script loaded. Tracers will appear when you fire a FastCast weapon.")
+print("[FastCast Tracer] If tracers don't appear, re-execute with your weapon equipped.")
 
 connections.toggleKeybind = UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
