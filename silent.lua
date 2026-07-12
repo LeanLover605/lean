@@ -762,9 +762,8 @@ local function hookFastCastForTracers()
                 if fastCastScript then
                     local success, fastCast = pcall(function()
                         return require(fastCastScript)
-                        print("FoundFastCast Script")
                     end)
-                    
+                    print("FoundFastCast Script")
                     if success and fastCast then
                         -- Hook the RayHit function to capture bullet trajectories
                         local oldRayHit = fastCast.RayHit
