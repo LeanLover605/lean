@@ -1037,6 +1037,9 @@ task.spawn(function()
         pcall(UpdateTracers)
     end
 end)
+
+print("[FastCast Tracer] Script loaded. Tracers will appear when you fire a FastCast weapon.")
+print("[FastCast Tracer] Use _G.FastCastTracer.Scan() to manually scan for casters.")
 -- ===== PING DETECTION =====
 local function detectPing()
     local statsData = Stats:FindFirstChild("Data")
