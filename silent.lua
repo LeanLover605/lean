@@ -145,6 +145,7 @@ local connections = {
     flagMonitor = nil,
     autoRefresh = nil,
     fastCastHook = nil,
+    bulletTracerUpdate = nil,  -- Add this
 }
 
 -- ===== AUTO-CALCULATION =====
@@ -746,39 +747,15 @@ local function updateBulletTracers()
     end
 end
 
--- ===== HOOK FASTCAST FOR BULLET TRACERS (Safe version) =====
+-- ===== HOOK FASTCAST FOR BULLET TRACERS (REWRITTEN) =====
+local fastCastHooked = false
+
 local function hookFastCastForTracers()
-    if connections.fastCastHook then return true end
+    if fastCastHooked then return true end
     
-    print("Hooking FastCast for bullet tracers...")
+    print("Attempting to hook FastCast for bullet tracers...")
     
-    -- Try to find an existing FastCast instance in workspace
-    for _, obj in ipairs(Workspace:GetDescendants()) do
-        if obj:IsA("ModuleScript") and obj.Name == "FastCastRedux" then
-            local success, fastCast = pcall(function()
-                return require(obj)
-            end)
-            if success and fastCast and fastCast.RayHit then
-                local oldRayHit = fastCast.RayHit
-                fastCast.RayHit = function(cast, result, velocity, cosmeticBullet)
-                    if config.bulletTracerEnabled and result then
-                        local origin = cast.Origin or Vector3.new(0, 0, 0)
-                        local hitPoint = result.Position or (result.Instance and result.Instance.Position) or origin
-                        createBulletTracer(origin, hitPoint)
-                    end
-                    
-                    if oldRayHit then
-                        return oldRayHit(cast, result, velocity, cosmeticBullet)
-                    end
-                end
-                connections.fastCastHook = true
-                print("FastCast hooked for bullet tracers via workspace search!")
-                return true
-            end
-        end
-    end
-    
-    -- Try to get it from ReplicatedStorage without hooking .new()
+    -- Method 1: Try to find the FastCast module and hook its RayHit
     local fastCastModule = ReplicatedStorage:FindFirstChild("Tools")
     if fastCastModule then
         local components = fastCastModule:FindFirstChild("Components")
@@ -787,36 +764,172 @@ local function hookFastCastForTracers()
             if muzzle then
                 local fastCastScript = muzzle:FindFirstChild("FastCastRedux")
                 if fastCastScript and fastCastScript:IsA("ModuleScript") then
-                    -- Just require it and hook the module directly
+                    print("Found FastCastRedux ModuleScript!")
+                    
                     local success, fastCast = pcall(function()
                         return require(fastCastScript)
                     end)
                     
-                    if success and fastCast and fastCast.RayHit then
-                        local oldRayHit = fastCast.RayHit
-                        fastCast.RayHit = function(cast, result, velocity, cosmeticBullet)
-                            if config.bulletTracerEnabled and result then
-                                local origin = cast.Origin or Vector3.new(0, 0, 0)
-                                local hitPoint = result.Position or (result.Instance and result.Instance.Position) or origin
-                                createBulletTracer(origin, hitPoint)
+                    if success and fastCast then
+                        print("FastCastRedux module required successfully!")
+                        
+                        -- Check if the module itself has RayHit
+                        if type(fastCast.RayHit) == "function" then
+                            print("Hooking FastCast.RayHit directly...")
+                            local oldRayHit = fastCast.RayHit
+                            fastCast.RayHit = function(cast, result, velocity, cosmeticBullet)
+                                if config.bulletTracerEnabled and result then
+                                    local origin = cast.Origin or Vector3.new(0, 0, 0)
+                                    local hitPoint = result.Position or (result.Instance and result.Instance.Position) or origin
+                                    createBulletTracer(origin, hitPoint)
+                                end
+                                if oldRayHit then
+                                    return oldRayHit(cast, result, velocity, cosmeticBullet)
+                                end
                             end
-                            
-                            if oldRayHit then
-                                return oldRayHit(cast, result, velocity, cosmeticBullet)
-                            end
+                            fastCastHooked = true
+                            print("FastCast hooked successfully! (Method 1)")
+                            return true
                         end
-                        connections.fastCastHook = true
-                        print("FastCast hooked for bullet tracers!")
-                        return true
+                        
+                        -- If it has a .new() method, try hooking the instances
+                        if type(fastCast.new) == "function" then
+                            print("Hooking FastCast.new()...")
+                            local oldNew = fastCast.new
+                            fastCast.new = function(...)
+                                local instance = oldNew(...)
+                                if instance and type(instance.RayHit) == "function" then
+                                    local oldRayHit = instance.RayHit
+                                    instance.RayHit = function(cast, result, velocity, cosmeticBullet)
+                                        if config.bulletTracerEnabled and result then
+                                            local origin = cast.Origin or Vector3.new(0, 0, 0)
+                                            local hitPoint = result.Position or (result.Instance and result.Instance.Position) or origin
+                                            createBulletTracer(origin, hitPoint)
+                                        end
+                                        if oldRayHit then
+                                            return oldRayHit(cast, result, velocity, cosmeticBullet)
+                                        end
+                                    end
+                                end
+                                return instance
+                            end
+                            fastCastHooked = true
+                            print("FastCast hooked successfully! (Method 2)")
+                            return true
+                        end
                     end
                 end
             end
         end
     end
     
-    print("Failed to hook FastCast for bullet tracers.")
+    -- Method 2: Search workspace for any FastCast instance
+    print("Searching workspace for FastCast instances...")
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj:IsA("ModuleScript") and obj.Name == "FastCastRedux" then
+            local success, fastCast = pcall(function()
+                return require(obj)
+            end)
+            if success and fastCast and type(fastCast.RayHit) == "function" then
+                print("Found FastCast in workspace!")
+                local oldRayHit = fastCast.RayHit
+                fastCast.RayHit = function(cast, result, velocity, cosmeticBullet)
+                    if config.bulletTracerEnabled and result then
+                        local origin = cast.Origin or Vector3.new(0, 0, 0)
+                        local hitPoint = result.Position or (result.Instance and result.Instance.Position) or origin
+                        createBulletTracer(origin, hitPoint)
+                    end
+                    if oldRayHit then
+                        return oldRayHit(cast, result, velocity, cosmeticBullet)
+                    end
+                end
+                fastCastHooked = true
+                print("FastCast hooked successfully! (Method 3)")
+                return true
+            end
+        end
+    end
+    
+    -- Method 3: Check if _G has FastCast
+    if _G.FastCast and type(_G.FastCast.RayHit) == "function" then
+        print("Found FastCast in _G!")
+        local oldRayHit = _G.FastCast.RayHit
+        _G.FastCast.RayHit = function(cast, result, velocity, cosmeticBullet)
+            if config.bulletTracerEnabled and result then
+                local origin = cast.Origin or Vector3.new(0, 0, 0)
+                local hitPoint = result.Position or (result.Instance and result.Instance.Position) or origin
+                createBulletTracer(origin, hitPoint)
+            end
+            if oldRayHit then
+                return oldRayHit(cast, result, velocity, cosmeticBullet)
+            end
+        end
+        fastCastHooked = true
+        print("FastCast hooked successfully! (Method 4)")
+        return true
+    end
+    
+    -- Method 4: Try to hook the Hit remote itself
+    print("Trying to hook Hit remote...")
+    local hitRemote = ReplicatedStorage:FindFirstChild("Tools")
+    if hitRemote then
+        local components = hitRemote:FindFirstChild("Components")
+        if components then
+            local muzzle = components:FindFirstChild("Muzzle")
+            if muzzle then
+                local hit = muzzle:FindFirstChild("Hit")
+                if hit and hit:IsA("RemoteEvent") then
+                    print("Found Hit RemoteEvent!")
+                    local oldFireServer = hit.FireServer
+                    hit.FireServer = function(self, player, velocity, humanoid)
+                        if config.bulletTracerEnabled and humanoid and humanoid.Parent then
+                            local char = humanoid.Parent
+                            local hrp = char:FindFirstChild("HumanoidRootPart")
+                            if hrp then
+                                local origin = Camera.CFrame.Position
+                                local hitPoint = hrp.Position
+                                createBulletTracer(origin, hitPoint)
+                            end
+                        end
+                        if oldFireServer then
+                            return oldFireServer(self, player, velocity, humanoid)
+                        end
+                    end
+                    fastCastHooked = true
+                    print("Hit remote hooked successfully! (Method 5)")
+                    return true
+                end
+            end
+        end
+    end
+    
+    print("All FastCast hooking methods failed.")
     return false
 end
+
+-- Retry hooking every few seconds until it works
+task.spawn(function()
+    local attempts = 0
+    while attempts < 10 and not fastCastHooked do
+        attempts = attempts + 1
+        if hookFastCastForTracers() then
+            print("FastCast hook successful on attempt " .. attempts)
+            break
+        end
+        print("FastCast hook attempt " .. attempts .. " failed, retrying...")
+        task.wait(3)
+    end
+    if not fastCastHooked then
+        print("Failed to hook FastCast after 10 attempts.")
+    end
+end)
+
+-- ===== BULLET TRACER UPDATE LOOP (Separate from ESP) =====
+connections.bulletTracerUpdate = task.spawn(function()
+    while task.wait(0.1) do  -- Update every 0.1 seconds for smooth tracers
+        pcall(updateBulletTracers)
+    end
+end)
 
 -- ===== PING DETECTION =====
 local function detectPing()
@@ -2048,7 +2161,7 @@ RageGroup:AddSlider("HitboxSize", {
     Text = "Hitbox Size",
     Default = config.hitboxSize,
     Min = 0.5,
-    Max = 50,
+    Max = 15,  -- Changed from 50 to 15
     Rounding = 0,
     Callback = function(v)
         config.hitboxSize = v
@@ -2307,17 +2420,6 @@ ThemeManager:ApplyToTab(SettingsTab)
 
 -- ===== INITIALIZATION =====
 createFOVCircle()
-
--- In initialization section, try to hook with retries
-task.spawn(function()
-    for i = 1, 5 do
-        if hookFastCastForTracers() then
-            break
-        end
-        task.wait(2)
-        print("Retrying FastCast hook... (" .. i .. "/5)")
-    end
-end)
 
 connections.toggleKeybind = UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
