@@ -2005,9 +2005,20 @@ guiKeyLabel:AddKeyPicker("GUIToggleKey", {
     Default = config.guiToggleKey,
     Mode = "Toggle",
     ChangedCallback = function(v)
+        -- Handle both string and Enum.KeyCode values
         local keyString = type(v) == "string" and v or tostring(v)
         config.guiToggleKey = keyString
-        Window:SetToggleKey(Enum.KeyCode[keyString])
+        
+        -- Try to get the Enum.KeyCode, with error handling
+        local success, keyCode = pcall(function()
+            return Enum.KeyCode[keyString]
+        end)
+        
+        if success and keyCode then
+            Window:SetToggleKey(keyCode)
+        else
+            warn("Invalid key: " .. keyString)
+        end
     end
 })
 
