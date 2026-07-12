@@ -746,93 +746,15 @@ local function updateBulletTracers()
     end
 end
 
--- ===== HOOK FASTCAST FOR BULLET TRACERS =====
+-- ===== HOOK FASTCAST FOR BULLET TRACERS (Safe version) =====
 local function hookFastCastForTracers()
     if connections.fastCastHook then return true end
     
     print("Hooking FastCast for bullet tracers...")
     
-    -- Wait longer for the module to load
-    task.wait(2)
-    
-    local fastCastModule = ReplicatedStorage:FindFirstChild("Tools")
-    if fastCastModule then
-        local components = fastCastModule:FindFirstChild("Components")
-        if components then
-            local muzzle = components:FindFirstChild("Muzzle")
-            if muzzle then
-                local fastCastScript = muzzle:FindFirstChild("FastCastRedux")
-                if fastCastScript and fastCastScript:IsA("ModuleScript") then
-                    print("Found FastCastRedux ModuleScript!")
-                    
-                    -- Try to require the module
-                    local success, fastCast = pcall(function()
-                        return require(fastCastScript)
-                    end)
-                    
-                    if success and fastCast then
-                        print("FastCastRedux module required successfully!")
-                        
-                        -- Check if it has RayHit
-                        if fastCast.RayHit then
-                            local oldRayHit = fastCast.RayHit
-                            fastCast.RayHit = function(cast, result, velocity, cosmeticBullet)
-                                if config.bulletTracerEnabled and result then
-                                    local origin = cast.Origin or Vector3.new(0, 0, 0)
-                                    local hitPoint = result.Position or (result.Instance and result.Instance.Position) or origin
-                                    createBulletTracer(origin, hitPoint)
-                                end
-                                
-                                if oldRayHit then
-                                    return oldRayHit(cast, result, velocity, cosmeticBullet)
-                                end
-                            end
-                            
-                            connections.fastCastHook = true
-                            print("FastCast hooked for bullet tracers!")
-                            return true
-                        else
-                            -- Try hooking .new() instead
-                            local oldNew = fastCast.new
-                            if oldNew then
-                                fastCast.new = function(...)
-                                    local instance = oldNew(...)
-                                    if instance and instance.RayHit then
-                                        local oldInstanceRayHit = instance.RayHit
-                                        instance.RayHit = function(cast, result, velocity, cosmeticBullet)
-                                            if config.bulletTracerEnabled and result then
-                                                local origin = cast.Origin or Vector3.new(0, 0, 0)
-                                                local hitPoint = result.Position or (result.Instance and result.Instance.Position) or origin
-                                                createBulletTracer(origin, hitPoint)
-                                            end
-                                            
-                                            if oldInstanceRayHit then
-                                                return oldInstanceRayHit(cast, result, velocity, cosmeticBullet)
-                                            end
-                                        end
-                                    end
-                                    return instance
-                                end
-                                connections.fastCastHook = true
-                                print("FastCast .new() hooked for bullet tracers!")
-                                return true
-                            end
-                        end
-                    else
-                        print("Failed to require FastCastRedux module: " .. tostring(success))
-                    end
-                else
-                    print("FastCastRedux not found in Muzzle")
-                end
-            end
-        end
-    end
-    
-    -- Try alternate method - search in workspace
-    print("Searching workspace for FastCastRedux...")
+    -- Try to find an existing FastCast instance in workspace
     for _, obj in ipairs(Workspace:GetDescendants()) do
         if obj:IsA("ModuleScript") and obj.Name == "FastCastRedux" then
-            print("Found FastCastRedux in workspace!")
             local success, fastCast = pcall(function()
                 return require(obj)
             end)
@@ -856,24 +778,40 @@ local function hookFastCastForTracers()
         end
     end
     
-    -- Try global _G.FastCast
-    if _G.FastCast and _G.FastCast.RayHit then
-        print("Found FastCast in _G!")
-        local oldRayHit = _G.FastCast.RayHit
-        _G.FastCast.RayHit = function(cast, result, velocity, cosmeticBullet)
-            if config.bulletTracerEnabled and result then
-                local origin = cast.Origin or Vector3.new(0, 0, 0)
-                local hitPoint = result.Position or (result.Instance and result.Instance.Position) or origin
-                createBulletTracer(origin, hitPoint)
-            end
-            
-            if oldRayHit then
-                return oldRayHit(cast, result, velocity, cosmeticBullet)
+    -- Try to get it from ReplicatedStorage without hooking .new()
+    local fastCastModule = ReplicatedStorage:FindFirstChild("Tools")
+    if fastCastModule then
+        local components = fastCastModule:FindFirstChild("Components")
+        if components then
+            local muzzle = components:FindFirstChild("Muzzle")
+            if muzzle then
+                local fastCastScript = muzzle:FindFirstChild("FastCastRedux")
+                if fastCastScript and fastCastScript:IsA("ModuleScript") then
+                    -- Just require it and hook the module directly
+                    local success, fastCast = pcall(function()
+                        return require(fastCastScript)
+                    end)
+                    
+                    if success and fastCast and fastCast.RayHit then
+                        local oldRayHit = fastCast.RayHit
+                        fastCast.RayHit = function(cast, result, velocity, cosmeticBullet)
+                            if config.bulletTracerEnabled and result then
+                                local origin = cast.Origin or Vector3.new(0, 0, 0)
+                                local hitPoint = result.Position or (result.Instance and result.Instance.Position) or origin
+                                createBulletTracer(origin, hitPoint)
+                            end
+                            
+                            if oldRayHit then
+                                return oldRayHit(cast, result, velocity, cosmeticBullet)
+                            end
+                        end
+                        connections.fastCastHook = true
+                        print("FastCast hooked for bullet tracers!")
+                        return true
+                    end
+                end
             end
         end
-        connections.fastCastHook = true
-        print("FastCast hooked for bullet tracers via _G!")
-        return true
     end
     
     print("Failed to hook FastCast for bullet tracers.")
