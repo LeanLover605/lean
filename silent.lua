@@ -680,38 +680,71 @@ do
     end)
 end
 
--- ===== BULLET TRACER FUNCTIONS =====
-local function createBulletTracer(startPos, endPos)
+-- ===== BULLET TRACER SYSTEM (REWRITTEN WITH BEAMS) =====
+local beamTraces = {}  -- Store active beams
+
+local function createBeamTracer(startPos, endPos)
     if not config.bulletTracerEnabled then return end
     
-    local line = Drawing.new("Line")
-    line.From = Camera:WorldToViewportPoint(startPos)
-    line.To = Camera:WorldToViewportPoint(endPos)
-    line.Color = config.bulletTracerColor
-    line.Thickness = config.bulletTracerThickness
-    line.Transparency = 0.8
-    line.Visible = true
+    -- Get the gun muzzle position (approximate from camera)
+    local origin = startPos or Camera.CFrame.Position + Camera.CFrame.LookVector * 2
     
+    -- Create a part for the tracer
+    local tracer = Instance.new("Part")
+    tracer.Name = "BulletTracer"
+    tracer.Anchored = true
+    tracer.CanCollide = false
+    tracer.CanQuery = false
+    tracer.Transparency = 0.3
+    tracer.Color = config.bulletTracerColor
+    tracer.Material = Enum.Material.Neon
+    tracer.Size = Vector3.new(0.2, 0.2, (endPos - origin).Magnitude)
+    tracer.CFrame = CFrame.lookAt(origin, endPos) * CFrame.new(0, 0, -tracer.Size.Z / 2)
+    tracer.Parent = workspace
+    
+    -- Add a trail effect
+    local attachment0 = Instance.new("Attachment")
+    attachment0.Parent = tracer
+    attachment0.Position = Vector3.new(0, 0, -tracer.Size.Z / 2)
+    
+    local attachment1 = Instance.new("Attachment")
+    attachment1.Parent = tracer
+    attachment1.Position = Vector3.new(0, 0, tracer.Size.Z / 2)
+    
+    local trail = Instance.new("Trail")
+    trail.Parent = tracer
+    trail.Attachment0 = attachment0
+    trail.Attachment1 = attachment1
+    trail.Lifetime = 0.1
+    trail.MinLength = 0.1
+    trail.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0.8),
+        NumberSequenceKeypoint.new(1, 0.2)
+    })
+    trail.Color = ColorSequence.new(config.bulletTracerColor)
+    trail.Enabled = true
+    
+    -- Store the tracer data
     local traceData = {
-        line = line,
-        startPos = startPos,
+        part = tracer,
+        trail = trail,
+        startPos = origin,
         endPos = endPos,
         startTime = tick(),
         duration = config.bulletTracerDuration,
-        alpha = 1
     }
     
-    table.insert(bulletTraces, traceData)
+    table.insert(beamTraces, traceData)
     
     -- Auto-remove after duration
     task.spawn(function()
         task.wait(config.bulletTracerDuration)
-        for i, data in pairs(bulletTraces) do
+        for i, data in pairs(beamTraces) do
             if data == traceData then
-                if data.line then
-                    pcall(function() data.line:Remove() end)
+                if data.part then
+                    pcall(function() data.part:Destroy() end)
                 end
-                bulletTraces[i] = nil
+                beamTraces[i] = nil
                 break
             end
         end
@@ -720,42 +753,60 @@ local function createBulletTracer(startPos, endPos)
     return traceData
 end
 
-local function updateBulletTracers()
-    for i, trace in pairs(bulletTraces) do
-        if trace and trace.line then
-            local elapsed = tick() - trace.startTime
-            local alpha = math.max(0, 1 - (elapsed / trace.duration))
-            trace.alpha = alpha
-            
-            -- Update line position (always from camera perspective)
-            local fromScreen = Camera:WorldToViewportPoint(trace.startPos)
-            local toScreen = Camera:WorldToViewportPoint(trace.endPos)
-            
-            pcall(function()
-                trace.line.From = fromScreen
-                trace.line.To = toScreen
-                trace.line.Transparency = 0.8 * (1 - (1 - alpha) * 0.7)
-            end)
+-- ===== HOOK THE HIT REMOTEEVENT (This actually works) =====
+local function hookHitRemoteForTracers()
+    print("Hooking Hit RemoteEvent for tracers...")
+    
+    local tools = ReplicatedStorage:FindFirstChild("Tools")
+    if tools then
+        local components = tools:FindFirstChild("Components")
+        if components then
+            local muzzle = components:FindFirstChild("Muzzle")
+            if muzzle then
+                local hitRemote = muzzle:FindFirstChild("Hit")
+                if hitRemote and hitRemote:IsA("RemoteEvent") then
+                    print("Found Hit RemoteEvent!")
+                    
+                    -- Store the original FireServer
+                    local originalFireServer = hitRemote.FireServer
+                    
+                    hitRemote.FireServer = function(self, player, velocity, humanoid)
+                        -- This fires when a bullet hits something
+                        if config.bulletTracerEnabled and humanoid and humanoid.Parent then
+                            local char = humanoid.Parent
+                            local targetPart = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso")
+                            if targetPart then
+                                -- Get the shooter's position (from camera)
+                                local origin = Camera.CFrame.Position + Camera.CFrame.LookVector * 2
+                                local hitPoint = targetPart.Position
+                                
+                                -- Create the tracer
+                                createBeamTracer(origin, hitPoint)
+                                print("Tracer created from " .. tostring(origin) .. " to " .. tostring(hitPoint))
+                            end
+                        end
+                        
+                        -- Call the original function
+                        if originalFireServer then
+                            return originalFireServer(self, player, velocity, humanoid)
+                        end
+                    end
+                    
+                    print("Hit RemoteEvent hooked successfully!")
+                    return true
+                end
+            end
         end
     end
     
-    -- Clean up any dead traces
-    for i, trace in pairs(bulletTraces) do
-        if not trace or not trace.line then
-            bulletTraces[i] = nil
-        end
-    end
+    print("Failed to hook Hit RemoteEvent.")
+    return false
 end
 
--- ===== HOOK FASTCAST FOR BULLET TRACERS (REWRITTEN) =====
-local fastCastHooked = false
-
-local function hookFastCastForTracers()
-    if fastCastHooked then return true end
+-- ===== HOOK FASTCAST WITH BEAMS (Alternative method) =====
+local function hookFastCastWithBeams()
+    print("Attempting to hook FastCast for beam tracers...")
     
-    print("Attempting to hook FastCast for bullet tracers...")
-    
-    -- Method 1: Try to find the FastCast module and hook its RayHit
     local fastCastModule = ReplicatedStorage:FindFirstChild("Tools")
     if fastCastModule then
         local components = fastCastModule:FindFirstChild("Components")
@@ -764,57 +815,27 @@ local function hookFastCastForTracers()
             if muzzle then
                 local fastCastScript = muzzle:FindFirstChild("FastCastRedux")
                 if fastCastScript and fastCastScript:IsA("ModuleScript") then
-                    print("Found FastCastRedux ModuleScript!")
-                    
                     local success, fastCast = pcall(function()
                         return require(fastCastScript)
                     end)
                     
                     if success and fastCast then
-                        print("FastCastRedux module required successfully!")
-                        
-                        -- Check if the module itself has RayHit
+                        -- Try to hook RayHit
                         if type(fastCast.RayHit) == "function" then
-                            print("Hooking FastCast.RayHit directly...")
                             local oldRayHit = fastCast.RayHit
                             fastCast.RayHit = function(cast, result, velocity, cosmeticBullet)
                                 if config.bulletTracerEnabled and result then
-                                    local origin = cast.Origin or Vector3.new(0, 0, 0)
+                                    local origin = cast.Origin or Camera.CFrame.Position + Camera.CFrame.LookVector * 2
                                     local hitPoint = result.Position or (result.Instance and result.Instance.Position) or origin
-                                    createBulletTracer(origin, hitPoint)
+                                    createBeamTracer(origin, hitPoint)
+                                    print("FastCast tracer created!")
                                 end
+                                
                                 if oldRayHit then
                                     return oldRayHit(cast, result, velocity, cosmeticBullet)
                                 end
                             end
-                            fastCastHooked = true
-                            print("FastCast hooked successfully! (Method 1)")
-                            return true
-                        end
-                        
-                        -- If it has a .new() method, try hooking the instances
-                        if type(fastCast.new) == "function" then
-                            print("Hooking FastCast.new()...")
-                            local oldNew = fastCast.new
-                            fastCast.new = function(...)
-                                local instance = oldNew(...)
-                                if instance and type(instance.RayHit) == "function" then
-                                    local oldRayHit = instance.RayHit
-                                    instance.RayHit = function(cast, result, velocity, cosmeticBullet)
-                                        if config.bulletTracerEnabled and result then
-                                            local origin = cast.Origin or Vector3.new(0, 0, 0)
-                                            local hitPoint = result.Position or (result.Instance and result.Instance.Position) or origin
-                                            createBulletTracer(origin, hitPoint)
-                                        end
-                                        if oldRayHit then
-                                            return oldRayHit(cast, result, velocity, cosmeticBullet)
-                                        end
-                                    end
-                                end
-                                return instance
-                            end
-                            fastCastHooked = true
-                            print("FastCast hooked successfully! (Method 2)")
+                            print("FastCast hooked with beam tracers!")
                             return true
                         end
                     end
@@ -823,111 +844,46 @@ local function hookFastCastForTracers()
         end
     end
     
-    -- Method 2: Search workspace for any FastCast instance
-    print("Searching workspace for FastCast instances...")
-    for _, obj in ipairs(Workspace:GetDescendants()) do
-        if obj:IsA("ModuleScript") and obj.Name == "FastCastRedux" then
-            local success, fastCast = pcall(function()
-                return require(obj)
-            end)
-            if success and fastCast and type(fastCast.RayHit) == "function" then
-                print("Found FastCast in workspace!")
-                local oldRayHit = fastCast.RayHit
-                fastCast.RayHit = function(cast, result, velocity, cosmeticBullet)
-                    if config.bulletTracerEnabled and result then
-                        local origin = cast.Origin or Vector3.new(0, 0, 0)
-                        local hitPoint = result.Position or (result.Instance and result.Instance.Position) or origin
-                        createBulletTracer(origin, hitPoint)
-                    end
-                    if oldRayHit then
-                        return oldRayHit(cast, result, velocity, cosmeticBullet)
-                    end
-                end
-                fastCastHooked = true
-                print("FastCast hooked successfully! (Method 3)")
-                return true
-            end
-        end
-    end
-    
-    -- Method 3: Check if _G has FastCast
-    if _G.FastCast and type(_G.FastCast.RayHit) == "function" then
-        print("Found FastCast in _G!")
-        local oldRayHit = _G.FastCast.RayHit
-        _G.FastCast.RayHit = function(cast, result, velocity, cosmeticBullet)
-            if config.bulletTracerEnabled and result then
-                local origin = cast.Origin or Vector3.new(0, 0, 0)
-                local hitPoint = result.Position or (result.Instance and result.Instance.Position) or origin
-                createBulletTracer(origin, hitPoint)
-            end
-            if oldRayHit then
-                return oldRayHit(cast, result, velocity, cosmeticBullet)
-            end
-        end
-        fastCastHooked = true
-        print("FastCast hooked successfully! (Method 4)")
-        return true
-    end
-    
-    -- Method 4: Try to hook the Hit remote itself
-    print("Trying to hook Hit remote...")
-    local hitRemote = ReplicatedStorage:FindFirstChild("Tools")
-    if hitRemote then
-        local components = hitRemote:FindFirstChild("Components")
-        if components then
-            local muzzle = components:FindFirstChild("Muzzle")
-            if muzzle then
-                local hit = muzzle:FindFirstChild("Hit")
-                if hit and hit:IsA("RemoteEvent") then
-                    print("Found Hit RemoteEvent!")
-                    local oldFireServer = hit.FireServer
-                    hit.FireServer = function(self, player, velocity, humanoid)
-                        if config.bulletTracerEnabled and humanoid and humanoid.Parent then
-                            local char = humanoid.Parent
-                            local hrp = char:FindFirstChild("HumanoidRootPart")
-                            if hrp then
-                                local origin = Camera.CFrame.Position
-                                local hitPoint = hrp.Position
-                                createBulletTracer(origin, hitPoint)
-                            end
-                        end
-                        if oldFireServer then
-                            return oldFireServer(self, player, velocity, humanoid)
-                        end
-                    end
-                    fastCastHooked = true
-                    print("Hit remote hooked successfully! (Method 5)")
-                    return true
-                end
-            end
-        end
-    end
-    
-    print("All FastCast hooking methods failed.")
     return false
 end
 
--- Retry hooking every few seconds until it works
-task.spawn(function()
-    local attempts = 0
-    while attempts < 10 and not fastCastHooked do
-        attempts = attempts + 1
-        if hookFastCastForTracers() then
-            print("FastCast hook successful on attempt " .. attempts)
-            break
+-- ===== CLEANUP BEAM TRACERS =====
+local function clearBeamTracers()
+    for _, data in pairs(beamTraces) do
+        if data.part then
+            pcall(function() data.part:Destroy() end)
         end
-        print("FastCast hook attempt " .. attempts .. " failed, retrying...")
-        task.wait(3)
     end
-    if not fastCastHooked then
-        print("Failed to hook FastCast after 10 attempts.")
-    end
-end)
+    beamTraces = {}
+    print("Beam tracers cleared!")
+end
 
--- ===== BULLET TRACER UPDATE LOOP (Separate from ESP) =====
-connections.bulletTracerUpdate = task.spawn(function()
-    while task.wait(0.1) do  -- Update every 0.1 seconds for smooth tracers
-        pcall(updateBulletTracers)
+-- ===== UPDATE BEAM TRACERS (Fade out) =====
+local function updateBeamTracers()
+    for i, trace in pairs(beamTraces) do
+        if trace and trace.part then
+            local elapsed = tick() - trace.startTime
+            local alpha = math.max(0, 1 - (elapsed / trace.duration))
+            
+            -- Fade out the part
+            pcall(function()
+                trace.part.Transparency = 0.3 + (1 - alpha) * 0.7
+            end)
+        end
+    end
+    
+    -- Clean up dead traces
+    for i, trace in pairs(beamTraces) do
+        if not trace or not trace.part then
+            beamTraces[i] = nil
+        end
+    end
+end
+
+-- ===== BEAM TRACER UPDATE LOOP =====
+connections.beamTracerUpdate = task.spawn(function()
+    while task.wait(0.05) do
+        pcall(updateBeamTracers)
     end
 end)
 
@@ -2052,21 +2008,17 @@ local TracersGroup = VisualsTab:AddRightGroupbox("Bullet Tracers")
 
 TracersGroup:AddToggle("BulletTracerEnabled", {
     Text = "Bullet Tracers",
-    Desc = "Show trajectory lines when bullets are fired",
+    Desc = "Show trajectory beams when bullets are fired",
     Default = config.bulletTracerEnabled,
     Callback = function(v)
         config.bulletTracerEnabled = v
         if v then
-            hookFastCastForTracers()
+            -- Try both hooking methods
+            hookHitRemoteForTracers()
+            hookFastCastWithBeams()
             print("Bullet tracers enabled!")
         else
-            -- Clear existing tracers
-            for _, trace in pairs(bulletTraces) do
-                if trace.line then
-                    pcall(function() trace.line:Remove() end)
-                end
-            end
-            bulletTraces = {}
+            clearBeamTracers()
             print("Bullet tracers disabled!")
         end
     end
@@ -2077,11 +2029,13 @@ tracerColorLabel:AddColorPicker("BulletTracerColor", {
     Default = config.bulletTracerColor,
     Callback = function(v)
         config.bulletTracerColor = v
-        -- Update existing tracers
-        for _, trace in pairs(bulletTraces) do
-            if trace.line then
+        for _, trace in pairs(beamTraces) do
+            if trace.part then
                 pcall(function()
-                    trace.line.Color = v
+                    trace.part.Color = v
+                    if trace.trail then
+                        trace.trail.Color = ColorSequence.new(v)
+                    end
                 end)
             end
         end
@@ -2102,16 +2056,17 @@ TracersGroup:AddSlider("BulletTracerDuration", {
 TracersGroup:AddSlider("BulletTracerThickness", {
     Text = "Tracer Thickness",
     Default = config.bulletTracerThickness,
-    Min = 1,
-    Max = 5,
-    Rounding = 0,
+    Min = 0.1,
+    Max = 2,
+    Rounding = 1,
     Callback = function(v)
         config.bulletTracerThickness = v
         -- Update existing tracers
-        for _, trace in pairs(bulletTraces) do
-            if trace.line then
+        for _, trace in pairs(beamTraces) do
+            if trace.part then
                 pcall(function()
-                    trace.line.Thickness = v
+                    local currentSize = trace.part.Size
+                    trace.part.Size = Vector3.new(v, v, currentSize.Z)
                 end)
             end
         end
@@ -2121,21 +2076,15 @@ TracersGroup:AddSlider("BulletTracerThickness", {
 TracersGroup:AddButton({
     Text = "Clear Tracers",
     Func = function()
-        for _, trace in pairs(bulletTraces) do
-            if trace.line then
-                pcall(function() trace.line:Remove() end)
-            end
-        end
-        bulletTraces = {}
-        print("Tracers cleared!")
+        clearBeamTracers()
     end
 })
 
 TracersGroup:AddButton({
-    Text = "Force Hook FastCast",
+    Text = "Force Hook Hit Remote",
     Func = function()
-        local success = hookFastCastForTracers()
-        print(success and "FastCast hooked successfully!" or "Failed to hook FastCast")
+        local success = hookHitRemoteForTracers()
+        print(success and "Hit Remote hooked!" or "Failed to hook Hit Remote")
     end
 })
 
