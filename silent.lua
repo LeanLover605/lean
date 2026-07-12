@@ -69,7 +69,6 @@ local config = {
     hitboxColor = Color3.fromRGB(255, 0, 0),
     hitboxTransparency = 0.5,
     hitboxTeamCheck = false,
-    hitboxPart = "Head",
     chantPackage = "English",
     velocityDeviation = WEAPON_SETTINGS.VelocityDeviation,
     debugMode = false,
@@ -137,6 +136,7 @@ local connections = {
     toggleKeybind = nil,
     espUpdate = nil,
     mountedCheck = nil,
+    autoRefresh = nil,
 }
 
 -- ===== AUTO-CALCULATION =====
@@ -262,6 +262,7 @@ local function cleanup()
                     hrp.BrickColor = DEFAULT_COLOR
                     hrp.Material = DEFAULT_MATERIAL
                     hrp.CanCollide = DEFAULT_COLLIDE
+                    hrp.CanQuery = true
                 end)
             end
         end
@@ -342,6 +343,13 @@ local function cleanup()
             connections.mountedCheck:Disconnect()
         end)
         connections.mountedCheck = nil
+    end
+    
+    if connections.autoRefresh then
+        pcall(function()
+            connections.autoRefresh:Disconnect()
+        end)
+        connections.autoRefresh = nil
     end
     
     if Window then
@@ -439,7 +447,7 @@ local function getTargetPart(player)
         end
     end
     
-    return player.Character:FindFirstChild(config.aimPart) or player.Character:FindFirstChild("Head")
+    return player.Character:FindFirstChild("HumanoidRootPart")
 end
 
 local function shouldExtendHitbox(player)
@@ -475,6 +483,7 @@ local function resetHRP(hrp)
         hrp.BrickColor = DEFAULT_COLOR
         hrp.Material = DEFAULT_MATERIAL
         hrp.CanCollide = DEFAULT_COLLIDE
+        hrp.CanQuery = true
     end)
 end
 
@@ -552,9 +561,10 @@ local function applyHitboxExpansion(player)
     pcall(function()
         hrp.Size = Vector3.new(config.hitboxSize, config.hitboxSize, config.hitboxSize)
         hrp.Transparency = config.hitboxTransparency
-        hrp.BrickColor = BrickColor.new("Dark Red")
+        hrp.BrickColor = BrickColor.new(config.hitboxColor)
         hrp.Material = Enum.Material.Neon
-        hrp.CanCollide = true
+        hrp.CanCollide = false
+        hrp.CanQuery = true
     end)
     
     Expanded[player] = true
@@ -757,54 +767,54 @@ local function hookHitRemote()
     return true
 end
 
--- ===== HITBOX EXTENDER (LEGACY - KEPT FOR COMPATIBILITY) =====
+-- ===== HITBOX EXTENDER (LEGACY - KEPT FOR COMPATIBILITY BUT NOT TRIGGERED) =====
+-- [[ LEGACY HITBOX CODE - KEPT BUT DISABLED ]]
 local function createHitboxForPlayer(player)
-    if not player or not player.Character then return end
-    removeHitboxForPlayer(player)
-    local targetPart = getTargetPart(player)
-    if not targetPart then 
-        print("No target part found for: " .. player.Name)
-        return 
-    end
-    
-    local hitbox = Instance.new("Part")
-    hitbox.Name = "ExtendedHitbox"
-    hitbox.Anchored = false
-    hitbox.CanCollide = true
-    hitbox.Massless = true
-    hitbox.Transparency = config.hitboxTransparency or 0.5
-    hitbox.Color = config.hitboxColor or Color3.fromRGB(255, 0, 0)
-    hitbox.Material = Enum.Material.Neon
-    hitbox.Size = targetPart.Size * (config.hitboxSize or 1.5)
-    
-    local weld = Instance.new("Weld")
-    weld.Part0 = targetPart
-    weld.Part1 = hitbox
-    weld.C0 = CFrame.new(0, 0, 0)
-    weld.Parent = hitbox
-    hitbox.Parent = player.Character
-    
-    local connection = hitbox.Touched:Connect(function(hit)
-        if hit and hit.Parent then
-            local isBullet = hit.Name:match("Bullet") or hit.Name:match("Projectile")
-            if isBullet then
-                local velocity = Vector3.new(0, 0, 0)
-                local velProp = hit:FindFirstChild("Velocity")
-                if velProp then
-                    if type(velProp.Value) == "Vector3" then
-                        velocity = velProp.Value
-                    elseif type(velProp.Value) == "number" then
-                        local dir = (hit.Position - hit.Parent.Position).Unit
-                        velocity = dir * velProp.Value
-                    end
-                end
-                fireHitRemote(player, velocity)
-            end
-        end
-    end)
-    
-    playerHitboxes[player] = { hitbox = hitbox, weld = weld, targetPart = targetPart, connection = connection }
-    print("Created hitbox for: " .. player.Name)
+    -- DISABLED - This function is not called anywhere
+    -- if not player or not player.Character then return end
+    -- removeHitboxForPlayer(player)
+    -- local targetPart = getTargetPart(player)
+    -- if not targetPart then return end
+    -- 
+    -- local hitbox = Instance.new("Part")
+    -- hitbox.Name = "ExtendedHitbox"
+    -- hitbox.Anchored = false
+    -- hitbox.CanCollide = false
+    -- hitbox.CanQuery = true
+    -- hitbox.Massless = true
+    -- hitbox.Transparency = config.hitboxTransparency or 0.5
+    -- hitbox.Color = config.hitboxColor or Color3.fromRGB(255, 0, 0)
+    -- hitbox.Material = Enum.Material.Neon
+    -- hitbox.Size = targetPart.Size * (config.hitboxSize or 1.5)
+    -- 
+    -- local weld = Instance.new("Weld")
+    -- weld.Part0 = targetPart
+    -- weld.Part1 = hitbox
+    -- weld.C0 = CFrame.new(0, 0, 0)
+    -- weld.Parent = hitbox
+    -- hitbox.Parent = player.Character
+    -- 
+    -- local connection = hitbox.Touched:Connect(function(hit)
+    --     if hit and hit.Parent then
+    --         local isBullet = hit.Name:match("Bullet") or hit.Name:match("Projectile")
+    --         if isBullet then
+    --             local velocity = Vector3.new(0, 0, 0)
+    --             local velProp = hit:FindFirstChild("Velocity")
+    --             if velProp then
+    --                 if type(velProp.Value) == "Vector3" then
+    --                     velocity = velProp.Value
+    --                 elseif type(velProp.Value) == "number" then
+    --                     local dir = (hit.Position - hit.Parent.Position).Unit
+    --                     velocity = dir * velProp.Value
+    --                 end
+    --             end
+    --             fireHitRemote(player, velocity)
+    --         end
+    --     end
+    -- end)
+    -- 
+    -- playerHitboxes[player] = { hitbox = hitbox, weld = weld, targetPart = targetPart, connection = connection }
+    -- print("Created hitbox for: " .. player.Name)
 end
 
 local function removeHitboxForPlayer(player)
@@ -821,18 +831,19 @@ local function removeHitboxForPlayer(player)
 end
 
 local function updateAllHitboxes()
-    for player, _ in pairs(playerHitboxes) do
-        if not player or not player.Parent or not shouldExtendHitbox(player) then
-            removeHitboxForPlayer(player)
-        end
-    end
-    if config.hitboxEnabled then
-        for _, player in ipairs(Players:GetPlayers()) do
-            if shouldExtendHitbox(player) and not playerHitboxes[player] then
-                createHitboxForPlayer(player)
-            end
-        end
-    end
+    -- DISABLED - Legacy hitbox system is disabled
+    -- for player, _ in pairs(playerHitboxes) do
+    --     if not player or not player.Parent or not shouldExtendHitbox(player) then
+    --         removeHitboxForPlayer(player)
+    --     end
+    -- end
+    -- if config.hitboxEnabled then
+    --     for _, player in ipairs(Players:GetPlayers()) do
+    --         if shouldExtendHitbox(player) and not playerHitboxes[player] then
+    --             createHitboxForPlayer(player)
+    --         end
+    --     end
+    -- end
 end
 
 -- ===== FIND HIT REMOTE =====
@@ -1606,7 +1617,8 @@ local function setupPlayerRespawnHandler(player)
         if config.hitboxEnabled then
             task.wait(0.5)
             if shouldExtendHitbox(player) then
-                createHitboxForPlayer(player)
+                -- Legacy hitbox is disabled - only use HRP expansion
+                -- createHitboxForPlayer(player)
             end
         end
         if charAddedConn then
@@ -2015,10 +2027,10 @@ HitboxGroup:AddToggle("HitboxEnabled", {
         if v then
             -- Apply hitbox expansion to all players
             applyHitboxToAllPlayers()
-            -- Legacy hitbox system for FastCast
-            updateAllHitboxes()
-            hookFastCastRedux()
-            hookHitRemote()
+            -- Legacy hitbox system is DISABLED
+            -- updateAllHitboxes()
+            -- hookFastCastRedux()
+            -- hookHitRemote()
         else
             -- Reset all expanded hitboxes
             resetAllExpanded()
@@ -2050,11 +2062,6 @@ HitboxGroup:AddSlider("HitboxSize", {
                     end
                 end
             end
-            -- Recreate legacy hitboxes
-            for player, _ in pairs(playerHitboxes) do
-                removeHitboxForPlayer(player)
-            end
-            updateAllHitboxes()
         end
     end
 })
@@ -2064,9 +2071,6 @@ colorLabel:AddColorPicker("HitboxColor", {
     Default = config.hitboxColor,
     Callback = function(v)
         config.hitboxColor = v
-        for _, data in pairs(playerHitboxes) do
-            if data.hitbox then pcall(function() data.hitbox.Color = v end) end
-        end
         -- Update expanded hitbox colors (they use BrickColor)
         for player, _ in pairs(Expanded) do
             if player and player.Character then
@@ -2089,9 +2093,6 @@ HitboxGroup:AddSlider("HitboxTransparency", {
     Rounding = 2,
     Callback = function(v)
         config.hitboxTransparency = v
-        for _, data in pairs(playerHitboxes) do
-            if data.hitbox then pcall(function() data.hitbox.Transparency = v end) end
-        end
         for player, _ in pairs(Expanded) do
             if player and player.Character then
                 local hrp = player.Character:FindFirstChild("HumanoidRootPart")
@@ -2113,25 +2114,6 @@ HitboxGroup:AddToggle("HitboxTeamCheck", {
         if config.hitboxEnabled then
             resetAllExpanded()
             applyHitboxToAllPlayers()
-            for player, _ in pairs(playerHitboxes) do
-                removeHitboxForPlayer(player)
-            end
-            updateAllHitboxes()
-        end
-    end
-})
-
-HitboxGroup:AddDropdown("HitboxPart", {
-    Text = "Target Part",
-    Values = {"Head", "Torso", "HumanoidRootPart"},
-    Default = 1,
-    Callback = function(v)
-        config.hitboxPart = v
-        if config.hitboxEnabled then
-            for player, _ in pairs(playerHitboxes) do
-                removeHitboxForPlayer(player)
-            end
-            updateAllHitboxes()
         end
     end
 })
@@ -2142,12 +2124,6 @@ HitboxGroup:AddButton({
         if config.hitboxEnabled then
             resetAllExpanded()
             applyHitboxToAllPlayers()
-            for player, _ in pairs(playerHitboxes) do
-                removeHitboxForPlayer(player)
-            end
-            updateAllHitboxes()
-            hookFastCastRedux()
-            hookHitRemote()
             print("Hitboxes refreshed!")
         else
             print("Hitbox extender is disabled. Enable it first.")
@@ -2232,22 +2208,8 @@ ActionsGroup:AddButton({
         if config.hitboxEnabled then
             resetAllExpanded()
             applyHitboxToAllPlayers()
-            for player, _ in pairs(playerHitboxes) do
-                removeHitboxForPlayer(player)
-            end
-            updateAllHitboxes()
-            hookFastCastRedux()
-            hookHitRemote()
             print("Hitboxes refreshed!")
         end
-    end
-})
-
-ActionsGroup:AddButton({
-    Text = "Force Hook FastCast",
-    Func = function()
-        local success = hookFastCastRedux()
-        print(success and "FastCast hooked!" or "Failed to hook FastCast")
     end
 })
 
@@ -2283,9 +2245,10 @@ findHitRemote()
 if config.hitboxEnabled then
     task.wait(0.5)
     applyHitboxToAllPlayers()
-    updateAllHitboxes()
-    hookFastCastRedux()
-    hookHitRemote()
+    -- Legacy hitbox system is DISABLED
+    -- updateAllHitboxes()
+    -- hookFastCastRedux()
+    -- hookHitRemote()
 end
 
 -- Setup ESP update loop on RenderStepped (smooth, every frame)
@@ -2310,7 +2273,8 @@ Players.PlayerAdded:Connect(function(player)
         task.wait(0.5)
         if shouldExtendHitbox(player) then
             applyHitboxExpansion(player)
-            createHitboxForPlayer(player)
+            -- Legacy hitbox is DISABLED
+            -- createHitboxForPlayer(player)
         end
     end
 end)
@@ -2362,14 +2326,6 @@ connections.velocityLoop = task.spawn(function()
     end
 end)
 
-connections.hitboxUpdate = task.spawn(function()
-    while task.wait(1) do
-        if config.hitboxEnabled then
-            pcall(updateAllHitboxes)
-        end
-    end
-end)
-
 -- Monitor for hitbox size changes
 connections.mountedCheck = task.spawn(function()
     local lastHitboxSize = config.hitboxSize
@@ -2384,6 +2340,27 @@ connections.mountedCheck = task.spawn(function()
                             hrp.Size = Vector3.new(config.hitboxSize, config.hitboxSize, config.hitboxSize)
                         end)
                     end
+                end
+            end
+        end
+    end
+end)
+
+-- ===== AUTO REFRESH HITBOXES ON HEARTBEAT (HRP ONLY) =====
+connections.autoRefresh = RunService.Heartbeat:Connect(function()
+    if config.hitboxEnabled then
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= plr and player.Character then
+                local hrp = player.Character:FindFirstChild("HumanoidRootPart")
+                if hrp and Expanded[player] then
+                    pcall(function()
+                        hrp.Size = Vector3.new(config.hitboxSize, config.hitboxSize, config.hitboxSize)
+                        hrp.Transparency = config.hitboxTransparency
+                        hrp.BrickColor = BrickColor.new(config.hitboxColor)
+                        hrp.Material = Enum.Material.Neon
+                        hrp.CanCollide = false
+                        hrp.CanQuery = true
+                    end)
                 end
             end
         end
