@@ -101,7 +101,7 @@ local config = {
     -- Bullet Tracer Settings
     bulletTracerEnabled = false,
     bulletTracerColor = Color3.fromRGB(255, 255, 0),
-    bulletTracerDuration = 0.5,
+    bulletTracerDuration = 2,
     bulletTracerThickness = 2,
 }
 
@@ -2195,8 +2195,8 @@ TracersGroup:AddSlider("BulletTracerDuration", {
     Text = "Tracer Fade Time (Seconds)",
     Default = config.bulletTracerDuration,
     Min = 0.05,
-    Max = 0.5,
-    Rounding = 2,
+    Max = 5,
+    Rounding = 1,
     Callback = function(v)
         config.bulletTracerDuration = v
         if _G.FastCastTracer then
@@ -2209,8 +2209,8 @@ TracersGroup:AddSlider("BulletTracerThickness", {
     Text = "Tracer Thickness",
     Default = config.bulletTracerThickness,
     Min = 0.05,
-    Max = 0.5,
-    Rounding = 2,
+    Max = 5,
+    Rounding = 1,
     Callback = function(v)
         config.bulletTracerThickness = v
         if _G.FastCastTracer then
