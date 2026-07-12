@@ -752,16 +752,17 @@ local function hookFastCastForTracers()
     
     print("Hooking FastCast for bullet tracers...")
     
-    local fastCastModule = ReplicatedStorage:FindFirstChild("Tools")
+    local fastCastModule = ReplicatedStorage:WaitForChild("Tools")
     if fastCastModule then
-        local components = fastCastModule:FindFirstChild("Components")
+        local components = fastCastModule:WaitForChild("Components")
         if components then
-            local muzzle = components:FindFirstChild("Muzzle")
+            local muzzle = components:WaitForChild("Muzzle")
             if muzzle then
-                local fastCastScript = muzzle:FindFirstChild("FastCastRedux")
+                local fastCastScript = muzzle:WaitForChild("FastCastRedux")
                 if fastCastScript then
                     local success, fastCast = pcall(function()
                         return require(fastCastScript)
+                        print("FoundFastCast Script")
                     end)
                     
                     if success and fastCast then
