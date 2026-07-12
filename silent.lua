@@ -2332,30 +2332,6 @@ toggleKeyLabel:AddKeyPicker("ToggleKey", {
     end
 })
 
-local guiKeyLabel = SettingsGroup:AddLabel("Toggle GUI")
-guiKeyLabel:AddKeyPicker("GUIToggleKey", {
-    Text = "Toggle GUI",
-    Default = config.guiToggleKey,
-    Mode = "Toggle",
-    ChangedCallback = function(v)
-        local keyString = type(v) == "string" and v or tostring(v)
-        config.guiToggleKey = keyString
-        
-        -- Try to get the Enum.KeyCode safely
-        local success, keyCode = pcall(function()
-            return Enum.KeyCode[keyString]
-        end)
-        
-        if success and keyCode then
-            Window:SetToggleKey(keyCode)
-        else
-            warn("Invalid key for GUI toggle: " .. keyString)
-            -- Fallback to RightShift
-            Window:SetToggleKey(Enum.KeyCode.RightShift)
-        end
-    end
-})
-
 local ActionsGroup = SettingsTab:AddRightGroupbox("Actions")
 
 ActionsGroup:AddButton({
