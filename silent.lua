@@ -261,6 +261,7 @@ local function cleanup()
                     hrp.BrickColor = DEFAULT_COLOR
                     hrp.Material = DEFAULT_MATERIAL
                     hrp.CanCollide = DEFAULT_COLLIDE
+                    hrp.CanQuery = true
                 end)
             end
         end
@@ -442,6 +443,7 @@ local function applyHitbox(player)
         hrp.BrickColor = BrickColor.new(config.hitboxColor)
         hrp.Material = Enum.Material.Neon
         hrp.CanCollide = false
+        hrp.CanQuery = true
     end)
 
     Expanded[player] = true
