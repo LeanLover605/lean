@@ -568,7 +568,7 @@ local function applyHitboxExpansion(player)
     end)
     
     Expanded[player] = true
-    print("Expanded hitbox for: " .. player.Name)
+    -- print("Expanded hitbox for: " .. player.Name)
 end
 
 local function resetAllExpanded()
