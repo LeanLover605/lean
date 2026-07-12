@@ -680,7 +680,7 @@ do
     end)
 end
 
--- ===== FASTCAST BULLET TRACER (Using ActiveCast detection) =====
+-- ===== FASTCAST BULLET TRACER (With full error handling) =====
 local TracerColor = Color3.fromRGB(0, 255, 128)  -- Lime Green
 local TracerThickness = 0.1
 local FadeTime = 0.2
@@ -725,24 +725,52 @@ local function CreateBulletSegment(startPoint, endPoint)
     table.insert(activeTracers, segment)
 end
 
--- ===== CHECK IF OBJECT IS AN ACTIVECAST =====
+-- ===== CHECK IF OBJECT IS AN ACTIVECAST (WITH ERROR HANDLING) =====
 local function IsActiveCast(obj)
     if typeof(obj) ~= "table" then return false end
-    local mt = getmetatable(obj)
-    if mt and mt.__type == "ActiveCast" then
+    
+    -- Use pcall to prevent errors from Spring or other objects
+    local success, mt = pcall(function()
+        return getmetatable(obj)
+    end)
+    
+    if not success or not mt then return false end
+    
+    -- Check if it has the ActiveCast type marker
+    if mt.__type == "ActiveCast" then
         return true
     end
+    
     return false
 end
 
--- ===== CHECK IF OBJECT IS A FASTCAST CASTER =====
+-- ===== CHECK IF OBJECT IS A FASTCAST CASTER (WITH ERROR HANDLING) =====
 local function IsFastCastCaster(obj)
     if typeof(obj) ~= "table" then return false end
     
-    -- Check for FastCast caster signature
-    local hasLengthChanged = obj.LengthChanged ~= nil
-    local hasFire = obj.Fire ~= nil
-    local hasConnect = obj.LengthChanged and typeof(obj.LengthChanged) == "table" and obj.LengthChanged.Connect ~= nil
+    -- Use pcall for each access to prevent errors
+    local hasLengthChanged, lengthChanged = pcall(function()
+        return obj.LengthChanged
+    end)
+    
+    if not hasLengthChanged then return false end
+    
+    local hasFire, fire = pcall(function()
+        return obj.Fire
+    end)
+    
+    if not hasFire then return false end
+    
+    -- Check if LengthChanged is an event with Connect
+    local hasConnect = false
+    if lengthChanged and typeof(lengthChanged) == "table" then
+        local success, connect = pcall(function()
+            return lengthChanged.Connect
+        end)
+        if success and connect then
+            hasConnect = true
+        end
+    end
     
     return (hasLengthChanged and hasFire and hasConnect)
 end
@@ -777,7 +805,7 @@ local function HookCaster(caster)
     return false
 end
 
--- ===== METHOD 1: SCAN GC FOR ACTIVECAST INSTANCES =====
+-- ===== SCAN GC FOR ACTIVECAST INSTANCES (WITH ERROR HANDLING) =====
 local function ScanGCForActiveCasts()
     print("[FastCast Tracer] Scanning GC for ActiveCast instances...")
     
@@ -789,20 +817,24 @@ local function ScanGCForActiveCasts()
         if typeof(obj) == "table" then
             totalTables = totalTables + 1
             
-            -- Check if it's an ActiveCast
-            if IsActiveCast(obj) then
-                print("[FastCast Tracer] Found ActiveCast!")
-                -- ActiveCast has a Caster property
-                if obj.Caster and IsFastCastCaster(obj.Caster) then
-                    if HookCaster(obj.Caster) then
+            -- Use pcall for the entire check
+            local success = pcall(function()
+                if IsActiveCast(obj) then
+                    print("[FastCast Tracer] Found ActiveCast!")
+                    if obj.Caster and IsFastCastCaster(obj.Caster) then
+                        if HookCaster(obj.Caster) then
+                            hookedCount = hookedCount + 1
+                        end
+                    end
+                elseif IsFastCastCaster(obj) then
+                    if HookCaster(obj) then
                         hookedCount = hookedCount + 1
                     end
                 end
-            -- Check if it's a FastCast caster directly
-            elseif IsFastCastCaster(obj) then
-                if HookCaster(obj) then
-                    hookedCount = hookedCount + 1
-                end
+            end)
+            
+            if not success then
+                -- Silently skip problematic objects
             end
         end
     end
@@ -817,7 +849,7 @@ local function ScanGCForActiveCasts()
     return hookedCount
 end
 
--- ===== METHOD 2: SCAN GC FOR FASTCAST CASTERS (Legacy) =====
+-- ===== SCAN GC FOR FASTCAST CASTERS (Legacy with error handling) =====
 local function ScanGCForFastCast()
     print("[FastCast Tracer] Scanning GC for FastCast casters...")
     
@@ -829,11 +861,17 @@ local function ScanGCForFastCast()
         if typeof(obj) == "table" then
             totalTables = totalTables + 1
             
-            -- Check if it has FastCast caster signature
-            if IsFastCastCaster(obj) then
-                if HookCaster(obj) then
-                    hookedCount = hookedCount + 1
+            -- Use pcall for the entire check
+            local success = pcall(function()
+                if IsFastCastCaster(obj) then
+                    if HookCaster(obj) then
+                        hookedCount = hookedCount + 1
+                    end
                 end
+            end)
+            
+            if not success then
+                -- Silently skip problematic objects
             end
         end
     end
@@ -987,7 +1025,6 @@ end
 
 -- ===== UPDATE LOOP =====
 local function UpdateTracers()
-    -- Debris handles cleanup, but we can clean any orphaned tracers
     for i, tracer in ipairs(activeTracers) do
         if not tracer or not tracer.Parent then
             table.remove(activeTracers, i)
@@ -1037,6 +1074,7 @@ task.spawn(function()
         pcall(UpdateTracers)
     end
 end)
+
 -- ===== PING DETECTION =====
 local function detectPing()
     local statsData = Stats:FindFirstChild("Data")
