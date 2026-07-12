@@ -2,7 +2,7 @@
 local Library = loadstring(game:HttpGet('https://raw.githubusercontent.com/zic1/LinoriaLib/refs/heads/main/Library.lua'))()
 local ThemeManager = loadstring(game:HttpGet('https://raw.githubusercontent.com/zic1/LinoriaLib/refs/heads/main/addons/ThemeManager.lua'))()
 local SaveManager = loadstring(game:HttpGet('https://raw.githubusercontent.com/zic1/LinoriaLib/refs/heads/main/addons/SaveManager.lua'))()
-print("skibidi")
+
 -- ===== SERVICES =====
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -1037,9 +1037,6 @@ task.spawn(function()
         pcall(UpdateTracers)
     end
 end)
-
-print("[FastCast Tracer] Script loaded. Tracers will appear when you fire a FastCast weapon.")
-print("[FastCast Tracer] Use _G.FastCastTracer.Scan() to manually scan for casters.")
 -- ===== PING DETECTION =====
 local function detectPing()
     local statsData = Stats:FindFirstChild("Data")
