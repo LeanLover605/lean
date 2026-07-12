@@ -65,14 +65,18 @@ local config = {
     adaptiveCalibration = true,
     calibrationRate = 0.05,
     hitboxEnabled = false,
-    hitboxSize = 1.5,
+    hitboxSize = 15,
     hitboxColor = Color3.fromRGB(255, 0, 0),
-    hitboxTransparency = 0.5,
-    hitboxTeamCheck = false,
-    hitboxPart = "Head",
+    hitboxTransparency = 1,
+    hitboxTeamCheck = true,
     chantPackage = "English",
     velocityDeviation = WEAPON_SETTINGS.VelocityDeviation,
     debugMode = false,
+    
+    -- Flag Tech Settings
+    flagTechEnabled = true,
+    flagHoldDuration = 1,
+    flagMaxDistance = 6.7,
     
     -- ESP Settings
     espEnabled = false,
@@ -93,26 +97,28 @@ local config = {
     espVisibleColor = Color3.fromRGB(0, 255, 128),
     espHiddenColor = Color3.fromRGB(255, 50, 50),
     espUseTeamColor = true,
+    
+    -- Bullet Tracer Settings
+    bulletTracerEnabled = false,
+    bulletTracerColor = Color3.fromRGB(255, 255, 0),
+    bulletTracerDuration = 2,
+    bulletTracerThickness = 2,
 }
 
 -- ===== STATE =====
 local fovCircle = nil
 local lastTargetPos = {}
 local targetVelocities = {}
-local hitRemote = nil
-local remoteConnection = nil
-local fastCastHooked = false
-local playerHitboxes = {}
-local originalFireServer = nil
 local isUILoaded = false
+local bulletTraces = {} -- Table to store active bullet tracers
 
--- ===== HITBOX EXPANSION STATE =====
-local Expanded = {}  -- Track which players have expanded hitboxes
+-- ===== HITBOX STATE =====
+local Expanded = {}
 local DEFAULT_HRP_SIZE = Vector3.new(2, 2, 1)
-local DEFAULT_TRANSPARENCY = 0
-local DEFAULT_COLOR = BrickColor.new("Bright blue")
+local DEFAULT_TRANSPARENCY = 1
+local DEFAULT_COLOR = BrickColor.new("Medium stone grey")
 local DEFAULT_MATERIAL = Enum.Material.Plastic
-local DEFAULT_COLLIDE = true
+local DEFAULT_COLLIDE = false
 
 -- ===== ESP STATE =====
 local espObjects = {}
@@ -126,17 +132,20 @@ local sliderElements = {
 }
 
 -- ===== UI TOGGLE REFERENCES =====
-local Toggles = {}  -- Store toggle references for keybind updates
+local Toggles = {}
 
--- ===== CONNECTIONS (FOR CLEANUP) =====
+-- ===== CONNECTIONS =====
 local connections = {
     renderStepped = nil,
     velocityLoop = nil,
     characterAdded = nil,
-    hitboxUpdate = nil,
     toggleKeybind = nil,
     espUpdate = nil,
-    mountedCheck = nil,
+    sizeMonitor = nil,
+    flagMonitor = nil,
+    autoRefresh = nil,
+    fastCastHook = nil,
+    bulletTracerUpdate = nil,  -- Add this
 }
 
 -- ===== AUTO-CALCULATION =====
@@ -149,7 +158,6 @@ local autoCalc = {
     hitRate = 0,
     lastShotTime = 0,
     shotCooldown = 0.5,
-    calibrationTarget = "prediction",
     calibrationValues = {
         prediction = { min = 0.05, max = 0.5, current = config.prediction },
         bulletDrop = { min = 0, max = 250, current = config.bulletDrop },
@@ -163,7 +171,7 @@ local autoCalc = {
     autoUpdateInterval = 0.5,
 }
 
--- ===== FOV CIRCLE (DRAWING API) =====
+-- ===== FOV CIRCLE =====
 local function createFOVCircle()
     if fovCircle then
         pcall(function() fovCircle:Remove() end)
@@ -229,7 +237,7 @@ local function updateUISliders()
     end
 end
 
--- ===== CLEANUP FUNCTION =====
+-- ===== CLEANUP =====
 local function cleanup()
     print("Cleaning up VaM Client...")
     
@@ -238,7 +246,15 @@ local function cleanup()
         fovCircle = nil
     end
     
-    -- Clean up ESP drawing objects
+    -- Clean up bullet tracers
+    for _, trace in pairs(bulletTraces) do
+        if trace.line then
+            pcall(function() trace.line:Remove() end)
+        end
+    end
+    bulletTraces = {}
+    
+    -- Clean up ESP
     for player, data in pairs(espObjects) do
         if data.box then pcall(function() data.box:Remove() end) end
         if data.boxOutline then pcall(function() data.boxOutline:Remove() end) end
@@ -262,86 +278,23 @@ local function cleanup()
                     hrp.BrickColor = DEFAULT_COLOR
                     hrp.Material = DEFAULT_MATERIAL
                     hrp.CanCollide = DEFAULT_COLLIDE
+                    hrp.CanQuery = true
                 end)
             end
         end
         Expanded[player] = nil
     end
     
-    -- Clean up old hitbox system
-    for player, _ in pairs(playerHitboxes) do
-        if playerHitboxes[player] then
-            if playerHitboxes[player].hitbox then
-                pcall(function() playerHitboxes[player].hitbox:Destroy() end)
-            end
-            if playerHitboxes[player].connection then
-                pcall(function() playerHitboxes[player].connection:Disconnect() end)
-            end
-            playerHitboxes[player] = nil
+    for _, conn in pairs(connections) do
+        if conn then
+            pcall(function()
+                if type(conn) == "RBXScriptConnection" then
+                    conn:Disconnect()
+                elseif type(conn) == "thread" then
+                    coroutine.close(conn)
+                end
+            end)
         end
-    end
-    
-    if originalFireServer and hitRemote then
-        pcall(function()
-            hitRemote.FireServer = originalFireServer
-        end)
-        originalFireServer = nil
-    end
-    
-    if remoteConnection then
-        pcall(function()
-            remoteConnection:Disconnect()
-        end)
-        remoteConnection = nil
-    end
-    
-    if connections.toggleKeybind then
-        pcall(function()
-            connections.toggleKeybind:Disconnect()
-        end)
-        connections.toggleKeybind = nil
-    end
-    
-    if connections.renderStepped then
-        pcall(function()
-            connections.renderStepped:Disconnect()
-        end)
-        connections.renderStepped = nil
-    end
-    
-    if connections.velocityLoop then
-        pcall(function()
-            connections.velocityLoop:Disconnect()
-        end)
-        connections.velocityLoop = nil
-    end
-    
-    if connections.characterAdded then
-        pcall(function()
-            connections.characterAdded:Disconnect()
-        end)
-        connections.characterAdded = nil
-    end
-    
-    if connections.hitboxUpdate then
-        pcall(function()
-            connections.hitboxUpdate:Disconnect()
-        end)
-        connections.hitboxUpdate = nil
-    end
-    
-    if connections.espUpdate then
-        pcall(function()
-            connections.espUpdate:Disconnect()
-        end)
-        connections.espUpdate = nil
-    end
-    
-    if connections.mountedCheck then
-        pcall(function()
-            connections.mountedCheck:Disconnect()
-        end)
-        connections.mountedCheck = nil
     end
     
     if Window then
@@ -353,12 +306,11 @@ local function cleanup()
     
     lastTargetPos = {}
     targetVelocities = {}
-    fastCastHooked = false
     config.enabled = false
     config.hitboxEnabled = false
     config.espEnabled = false
     
-    print("Cleanup complete! VaM Client fully unloaded.")
+    print("Cleanup complete!")
 end
 
 -- ===== CHANT CHANGER =====
@@ -439,34 +391,10 @@ local function getTargetPart(player)
         end
     end
     
-    return player.Character:FindFirstChild(config.aimPart) or player.Character:FindFirstChild("Head")
+    return player.Character:FindFirstChild("HumanoidRootPart")
 end
 
-local function shouldExtendHitbox(player)
-    if not player or player == plr then return false end
-    if not player.Character then return false end
-    if config.hitboxTeamCheck and player.Team == plr.Team then return false end
-    local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
-    if not humanoid or humanoid.Health <= 0 then return false end
-    return true
-end
-
-local function getPlayerFromPart(part)
-    if not part then return nil end
-    for player, data in pairs(playerHitboxes) do
-        if data.hitbox == part then return player end
-    end
-    local character = part.Parent
-    while character do
-        if character:IsA("Model") and character:FindFirstChildOfClass("Humanoid") then
-            return Players:GetPlayerFromCharacter(character)
-        end
-        character = character.Parent
-    end
-    return nil
-end
-
--- ===== HITBOX EXPANSION CORE FUNCTIONS =====
+-- ===== HITBOX EXPANSION =====
 local function resetHRP(hrp)
     if not hrp then return end
     pcall(function()
@@ -479,86 +407,63 @@ local function resetHRP(hrp)
 end
 
 local function isMounted(player)
-    if not player then return false end
-    
     local model = Workspace:FindFirstChild(player.Name)
     if not model then return false end
-    
-    -- Check for horse mount
+
     local horse = model:FindFirstChild("Horse")
     if horse and horse:IsA("Model") then
         local char = player.Character
-        if char then
-            local hrp = char:FindFirstChild("HumanoidRootPart")
-            if hrp then
-                resetHRP(hrp)
-            end
+        if not char then return true end
+
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            resetHRP(hrp)
         end
         return true
     end
-    
-    -- Check for vehicle seat
-    local seat = model:FindFirstChild("Seat")
-    if seat and seat:IsA("VehicleSeat") then
-        local char = player.Character
-        if char then
-            local hrp = char:FindFirstChild("HumanoidRootPart")
-            if hrp then
-                resetHRP(hrp)
-            end
-        end
-        return true
-    end
-    
+
     return false
 end
 
-local function applyHitboxExpansion(player)
+local function applyHitbox(player)
     if not config.hitboxEnabled then return end
     if not player or not player.Character then return end
-    
+
     -- Team check
     if config.hitboxTeamCheck and player.Team ~= nil and plr.Team ~= nil then
         if player.Team == plr.Team then
-            if Expanded[player] then
-                local hrp = player.Character:FindFirstChild("HumanoidRootPart")
-                if hrp then
-                    resetHRP(hrp)
-                end
-                Expanded[player] = nil
-            end
             return
         end
     end
-    
+
     local hrp = player.Character:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
-    
-    -- Check if mounted
+
+    -- Mounted? skip & reset
     if isMounted(player) then
         Expanded[player] = nil
         return
     end
-    
-    -- Update size if already expanded
+
+    -- Already expanded?
     if Expanded[player] then
         pcall(function()
             hrp.Size = Vector3.new(config.hitboxSize, config.hitboxSize, config.hitboxSize)
         end)
         return
     end
-    
-    -- Apply hitbox expansion
+
+    -- Apply hitbox
     pcall(function()
         hrp.Size = Vector3.new(config.hitboxSize, config.hitboxSize, config.hitboxSize)
         hrp.Transparency = config.hitboxTransparency
-        hrp.BrickColor = BrickColor.new("Dark Red")
+        hrp.BrickColor = BrickColor.new(config.hitboxColor)
         hrp.Material = Enum.Material.Neon
-        hrp.CanCollide = true
+        hrp.CanCollide = false
+        hrp.CanQuery = true
     end)
-    
+
     Expanded[player] = true
-    print("Expanded hitbox for: " .. player.Name)
 end
 
 local function resetAllExpanded()
@@ -576,65 +481,376 @@ end
 local function applyHitboxToAllPlayers()
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= plr then
-            applyHitboxExpansion(player)
+            applyHitbox(player)
         end
     end
 end
 
-local function onCharacterAddedWithExpansion(player, char)
-    Expanded[player] = nil
-    
-    task.spawn(function()
-        local hrp = char:FindFirstChild("HumanoidRootPart")
-        if not hrp then
-            hrp = char:WaitForChild("HumanoidRootPart", 5)
+-- ===== FLAG TECH =====
+local HOLD_DURATION = config.flagHoldDuration
+local MAX_DISTANCE = config.flagMaxDistance
+
+local function modifyPrompt(player, prompt)
+    if not prompt or not prompt:IsA("ProximityPrompt") then return end
+    if not config.flagTechEnabled then return end
+
+    if config.hitboxTeamCheck and player.Team ~= nil and plr.Team ~= nil then
+        if player.Team == plr.Team then
+            return
         end
-        if hrp then
-            applyHitboxExpansion(player)
+    end
+
+    pcall(function()
+        prompt.HoldDuration = HOLD_DURATION
+        prompt.MaxActivationDistance = MAX_DISTANCE
+    end)
+end
+
+local function handleGrip(player, grip)
+    if not grip then return end
+
+    for _, obj in ipairs(grip:GetChildren()) do
+        if obj:IsA("ProximityPrompt") then
+            modifyPrompt(player, obj)
+        end
+    end
+
+    grip.ChildAdded:Connect(function(child)
+        if child:IsA("ProximityPrompt") then
+            modifyPrompt(player, child)
         end
     end)
-    
-    -- Monitor workspace folder for mount changes
-    task.spawn(function()
-        local model = Workspace:FindFirstChild(player.Name)
-        if not model then
-            model = Workspace:WaitForChild(player.Name, 5)
+end
+
+local function handleColoursTool(player, tool)
+    if not tool then return end
+    local model = tool:FindFirstChild("Model")
+    if not model then return end
+
+    local grip = model:FindFirstChild("Grip")
+    if grip and grip:IsA("BasePart") then
+        handleGrip(player, grip)
+    end
+
+    model.ChildAdded:Connect(function(child)
+        if child.Name == "Grip" and child:IsA("BasePart") then
+            handleGrip(player, child)
         end
-        if not model then return end
-        
-        model.ChildAdded:Connect(function(child)
-            if child.Name == "Horse" or child.Name == "Seat" then
-                if isMounted(player) then
-                    Expanded[player] = nil
+    end)
+end
+
+local function monitorPlayerFlags(player)
+    if not player then return end
+
+    local success, playerFolder = pcall(function() return Workspace:WaitForChild(player.Name, 5) end)
+    if not success or not playerFolder then return end
+
+    for _, obj in ipairs(playerFolder:GetChildren()) do
+        if obj.Name == "Colours" and obj:IsA("Tool") then
+            handleColoursTool(player, obj)
+        end
+    end
+
+    playerFolder.ChildAdded:Connect(function(child)
+        if child.Name == "Colours" and child:IsA("Tool") then
+            handleColoursTool(player, child)
+        end
+    end)
+end
+
+local function reapplyPromptsForPlayer(player)
+    if not player then return end
+    local folder = Workspace:FindFirstChild(player.Name)
+    if not folder then return end
+
+    for _, child in ipairs(folder:GetChildren()) do
+        if child.Name == "Colours" and child:IsA("Tool") then
+            local model = child:FindFirstChild("Model")
+            if model then
+                local grip = model:FindFirstChild("Grip")
+                if grip and grip:IsA("BasePart") then
+                    for _, obj in ipairs(grip:GetChildren()) do
+                        if obj:IsA("ProximityPrompt") then
+                            modifyPrompt(player, obj)
+                        end
+                    end
                 end
             end
-        end)
-        
-        model.ChildRemoved:Connect(function(child)
-            if child.Name == "Horse" or child.Name == "Seat" then
-                task.wait(0.1)
-                applyHitboxExpansion(player)
+        end
+    end
+end
+
+local function reapplyPromptsForAll()
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= plr then
+            reapplyPromptsForPlayer(player)
+        end
+    end
+end
+
+-- ===== PLAYER CONNECTIONS (Modified with 5 second auto-refresh) =====
+local function onCharacterAdded(player, char)
+    Expanded[player] = nil
+
+    task.spawn(function()
+        local hrp = char:WaitForChild("HumanoidRootPart", 5)
+        if hrp then
+            applyHitbox(player)
+        end
+    end)
+
+    task.spawn(function()
+        local ok, model = pcall(function() return Workspace:WaitForChild(player.Name, 5) end)
+        if not ok or not model then return end
+
+        model.ChildAdded:Connect(function()
+            if isMounted(player) then
+                Expanded[player] = nil
             end
         end)
+
+        model.ChildRemoved:Connect(function()
+            task.wait(0.1)
+            applyHitbox(player)
+        end)
     end)
 end
 
--- ===== FIRE HIT REMOTE =====
-local function fireHitRemote(targetPlayer, hitVelocity)
-    if not hitRemote then return end
-    if not targetPlayer or not targetPlayer.Character then return end
-    local humanoid = targetPlayer.Character:FindFirstChildOfClass("Humanoid")
-    if not humanoid then return end
-    pcall(function()
-        hitRemote:FireServer(plr, hitVelocity, humanoid)
+local function onPlayerAdded(player)
+    -- Character handling
+    player.CharacterAdded:Connect(function(char)
+        onCharacterAdded(player, char)
+    end)
+
+    if player.Character then
+        onCharacterAdded(player, player.Character)
+    end
+
+    -- Flag monitoring
+    monitorPlayerFlags(player)
+end
+
+-- Connect existing players
+for _, player in ipairs(Players:GetPlayers()) do
+    if player ~= plr then
+        onPlayerAdded(player)
+    end
+end
+
+-- Future players
+Players.PlayerAdded:Connect(function(player)
+    if player ~= plr then
+        onPlayerAdded(player)
+    end
+end)
+
+-- ===== AUTO REFRESH HITBOXES EVERY 5 SECONDS =====
+connections.autoRefresh = task.spawn(function()
+    while task.wait(5) do
+        if config.hitboxEnabled then
+            for _, player in ipairs(Players:GetPlayers()) do
+                if player ~= plr then
+                    applyHitbox(player)
+                end
+            end
+        end
+    end
+end)
+
+-- ===== Monitor _G.HeadSize changes (now using config.hitboxSize) =====
+do
+    local lastHitboxSize = config.hitboxSize
+    task.spawn(function()
+        while true do
+            task.wait(0.15)
+            if config.hitboxSize ~= lastHitboxSize then
+                lastHitboxSize = config.hitboxSize
+                for player, _ in pairs(Expanded) do
+                    if player and player.Character then
+                        local hrp = player.Character:FindFirstChild("HumanoidRootPart")
+                        if hrp then
+                            pcall(function()
+                                hrp.Size = Vector3.new(config.hitboxSize, config.hitboxSize, config.hitboxSize)
+                            end)
+                        end
+                    end
+                end
+            end
+        end
     end)
 end
 
--- ===== HOOK FASTCASTREDUX =====
-local function hookFastCastRedux()
-    if fastCastHooked then return true end
+-- ===== FASTCAST BULLET TRACER (Using ActiveCast detection) =====
+local TracerColor = Color3.fromRGB(0, 255, 128)  -- Lime Green
+local TracerThickness = 0.1
+local FadeTime = 0.2
+
+local TweenService = game:GetService("TweenService")
+local Debris = game:GetService("Debris")
+local RunService = game:GetService("RunService")
+
+local tracerHooked = false
+local activeTracers = {}
+local hookedCasters = {}
+
+-- ===== CREATE BULLET SEGMENT =====
+local function CreateBulletSegment(startPoint, endPoint)
+    if not startPoint or not endPoint then return end
     
-    print("Attempting to hook FastCastRedux...")
+    local distance = (startPoint - endPoint).Magnitude
+    if distance < 0.1 or distance > 1000 then return end
+
+    local segment = Instance.new("Part")
+    segment.Name = "FastCastTracer"
+    segment.Anchored = true
+    segment.CanCollide = false
+    segment.CanTouch = false
+    segment.CanQuery = false
+    segment.Material = Enum.Material.Neon
+    segment.Color = TracerColor
+    segment.Transparency = 0.2
+    segment.Size = Vector3.new(TracerThickness, TracerThickness, distance)
+    
+    segment.CFrame = CFrame.lookAt(startPoint, endPoint) * CFrame.new(0, 0, -distance / 2)
+    segment.Parent = workspace
+
+    local fadeTween = TweenService:Create(segment, TweenInfo.new(FadeTime, Enum.EasingStyle.Linear), {
+        Transparency = 1,
+        Size = Vector3.new(0, 0, distance)
+    })
+    
+    fadeTween:Play()
+    Debris:AddItem(segment, FadeTime + 0.05)
+    
+    table.insert(activeTracers, segment)
+end
+
+-- ===== CHECK IF OBJECT IS AN ACTIVECAST =====
+local function IsActiveCast(obj)
+    if typeof(obj) ~= "table" then return false end
+    local mt = getmetatable(obj)
+    if mt and mt.__type == "ActiveCast" then
+        return true
+    end
+    return false
+end
+
+-- ===== CHECK IF OBJECT IS A FASTCAST CASTER =====
+local function IsFastCastCaster(obj)
+    if typeof(obj) ~= "table" then return false end
+    
+    -- Check for FastCast caster signature
+    local hasLengthChanged = obj.LengthChanged ~= nil
+    local hasFire = obj.Fire ~= nil
+    local hasConnect = obj.LengthChanged and typeof(obj.LengthChanged) == "table" and obj.LengthChanged.Connect ~= nil
+    
+    return (hasLengthChanged and hasFire and hasConnect)
+end
+
+-- ===== HOOK A CASTER'S LENGTHCHANGED EVENT =====
+local function HookCaster(caster)
+    if not caster or typeof(caster) ~= "table" then return false end
+    
+    -- Check if already hooked
+    if hookedCasters[caster] then return false end
+    
+    -- Verify it's a FastCast caster
+    if not IsFastCastCaster(caster) then return false end
+    
+    -- Check if LengthChanged exists and is connectable
+    if caster.LengthChanged and typeof(caster.LengthChanged) == "table" and caster.LengthChanged.Connect then
+        -- Mark as hooked
+        hookedCasters[caster] = true
+        
+        -- Hook the LengthChanged event
+        caster.LengthChanged:Connect(function(cast, lastPoint, rayDir, displacement, velocity, bulletPart)
+            if lastPoint and rayDir and displacement then
+                local tipPoint = lastPoint + (rayDir * displacement)
+                task.spawn(CreateBulletSegment, lastPoint, tipPoint)
+            end
+        end)
+        
+        print("[FastCast Tracer] Hooked FastCast caster!")
+        return true
+    end
+    
+    return false
+end
+
+-- ===== METHOD 1: SCAN GC FOR ACTIVECAST INSTANCES =====
+local function ScanGCForActiveCasts()
+    print("[FastCast Tracer] Scanning GC for ActiveCast instances...")
+    
+    local gcObjects = getgc(true)
+    local hookedCount = 0
+    local totalTables = 0
+    
+    for _, obj in ipairs(gcObjects) do
+        if typeof(obj) == "table" then
+            totalTables = totalTables + 1
+            
+            -- Check if it's an ActiveCast
+            if IsActiveCast(obj) then
+                print("[FastCast Tracer] Found ActiveCast!")
+                -- ActiveCast has a Caster property
+                if obj.Caster and IsFastCastCaster(obj.Caster) then
+                    if HookCaster(obj.Caster) then
+                        hookedCount = hookedCount + 1
+                    end
+                end
+            -- Check if it's a FastCast caster directly
+            elseif IsFastCastCaster(obj) then
+                if HookCaster(obj) then
+                    hookedCount = hookedCount + 1
+                end
+            end
+        end
+    end
+    
+    if hookedCount > 0 then
+        tracerHooked = true
+        print("[FastCast Tracer] Successfully hooked " .. hookedCount .. " FastCast caster(s)! (Scanned " .. totalTables .. " tables)")
+    else
+        print("[FastCast Tracer] No FastCast casters found in GC. (Scanned " .. totalTables .. " tables)")
+    end
+    
+    return hookedCount
+end
+
+-- ===== METHOD 2: SCAN GC FOR FASTCAST CASTERS (Legacy) =====
+local function ScanGCForFastCast()
+    print("[FastCast Tracer] Scanning GC for FastCast casters...")
+    
+    local gcObjects = getgc(true)
+    local hookedCount = 0
+    local totalTables = 0
+    
+    for _, obj in ipairs(gcObjects) do
+        if typeof(obj) == "table" then
+            totalTables = totalTables + 1
+            
+            -- Check if it has FastCast caster signature
+            if IsFastCastCaster(obj) then
+                if HookCaster(obj) then
+                    hookedCount = hookedCount + 1
+                end
+            end
+        end
+    end
+    
+    if hookedCount > 0 then
+        tracerHooked = true
+        print("[FastCast Tracer] Successfully hooked " .. hookedCount .. " FastCast caster(s)! (Scanned " .. totalTables .. " tables)")
+    else
+        print("[FastCast Tracer] No FastCast casters found in GC. (Scanned " .. totalTables .. " tables)")
+    end
+    
+    return hookedCount
+end
+
+-- ===== METHOD 3: HOOK FASTCAST.NEW() CONSTRUCTOR =====
+local function HookFastCastNew()
+    print("[FastCast Tracer] Attempting to hook FastCast.new()...")
     
     local fastCastModule = ReplicatedStorage:FindFirstChild("Tools")
     if fastCastModule then
@@ -643,219 +859,184 @@ local function hookFastCastRedux()
             local muzzle = components:FindFirstChild("Muzzle")
             if muzzle then
                 local fastCastScript = muzzle:FindFirstChild("FastCastRedux")
-                if fastCastScript then
-                    print("Found FastCastRedux module script!")
-                    
+                if fastCastScript and fastCastScript:IsA("ModuleScript") then
                     local success, fastCast = pcall(function()
                         return require(fastCastScript)
                     end)
                     
-                    if success and fastCast then
-                        print("FastCastRedux module required successfully!")
+                    if success and fastCast and fastCast.new then
+                        print("[FastCast Tracer] Found FastCast module, hooking .new()...")
                         
-                        local fastCastInstance = nil
-                        
-                        if fastCast.RayHit then
-                            fastCastInstance = fastCast
-                            print("Method 1: Using required module directly")
-                        end
-                        
-                        if not fastCastInstance and _G.FastCast and _G.FastCast.RayHit then
-                            fastCastInstance = _G.FastCast
-                            print("Method 2: Found global FastCast instance")
-                        end
-                        
-                        if not fastCastInstance then
-                            for _, obj in ipairs(Workspace:GetDescendants()) do
-                                if obj:IsA("ModuleScript") and obj.Name == "FastCastRedux" then
-                                    local s, r = pcall(function()
-                                        return require(obj)
-                                    end)
-                                    if s and r and r.RayHit then
-                                        fastCastInstance = r
-                                        print("Method 3: Found FastCast instance via workspace search")
-                                        break
-                                    end
-                                end
-                            end
-                        end
-                        
-                        if not fastCastInstance and fastCast.new then
-                            local oldNew = fastCast.new
-                            fastCast.new = function(...)
-                                local instance = oldNew(...)
-                                if instance and instance.RayHit then
-                                    local oldRayHit = instance.RayHit
-                                    instance.RayHit = function(cast, result, velocity, cosmeticBullet)
-                                        local hitPart = result and result.Instance
-                                        local hitPlayer = getPlayerFromPart(hitPart)
-                                        if hitPlayer and playerHitboxes[hitPlayer] then
-                                            print("FastCast hit extended hitbox: " .. hitPlayer.Name)
-                                            fireHitRemote(hitPlayer, velocity)
-                                        end
-                                        if oldRayHit then
-                                            return oldRayHit(cast, result, velocity, cosmeticBullet)
-                                        end
-                                    end
-                                end
-                                return instance
-                            end
-                            fastCastHooked = true
-                            print("FastCastRedux .new() hooked successfully!")
-                            return true
-                        end
-                        
-                        if fastCastInstance and fastCastInstance.RayHit then
-                            print("Hooking FastCastRedux RayHit event...")
+                        local oldNew = fastCast.new
+                        fastCast.new = function(...)
+                            local caster = oldNew(...)
                             
-                            local oldRayHit = fastCastInstance.RayHit
-                            fastCastInstance.RayHit = function(cast, result, velocity, cosmeticBullet)
-                                local hitPart = result and result.Instance
-                                local hitPlayer = getPlayerFromPart(hitPart)
-                                if hitPlayer and playerHitboxes[hitPlayer] then
-                                    print("FastCast hit extended hitbox: " .. hitPlayer.Name)
-                                    fireHitRemote(hitPlayer, velocity)
-                                end
-                                if oldRayHit then
-                                    return oldRayHit(cast, result, velocity, cosmeticBullet)
+                            -- Hook the new caster
+                            if caster and typeof(caster) == "table" then
+                                task.wait(0.1) -- Wait for caster to initialize
+                                if IsFastCastCaster(caster) then
+                                    HookCaster(caster)
                                 end
                             end
                             
-                            fastCastHooked = true
-                            print("FastCastRedux hooked successfully!")
-                            return true
+                            return caster
                         end
-                    else
-                        print("Failed to require FastCastRedux module.")
+                        
+                        print("[FastCast Tracer] FastCast.new() hooked successfully!")
+                        return true
                     end
                 end
             end
         end
     end
     
-    print("Failed to hook FastCastRedux.")
     return false
 end
 
--- ===== HOOK HIT REMOTE =====
-local function hookHitRemote()
-    if originalFireServer then return true end
-    if not hitRemote then return false end
-    originalFireServer = hitRemote.FireServer
-    hitRemote.FireServer = function(self, ...)
-        local args = {...}
-        local targetHumanoid = args[3]
-        local targetPlayer = targetHumanoid and targetHumanoid.Parent and Players:GetPlayerFromCharacter(targetHumanoid.Parent)
-        if targetPlayer and playerHitboxes[targetPlayer] then
-            print("Hit on extended hitbox: " .. targetPlayer.Name)
-        end
-        if originalFireServer then
-            return originalFireServer(self, ...)
+-- ===== METHOD 4: HOOK GLOBAL FASTCAST =====
+local function HookGlobalFastCast()
+    if _G.FastCast and typeof(_G.FastCast) == "table" then
+        if IsFastCastCaster(_G.FastCast) then
+            print("[FastCast Tracer] Found global FastCast!")
+            return HookCaster(_G.FastCast)
         end
     end
-    print("Hit remote hooked!")
-    return true
+    return false
 end
 
--- ===== HITBOX EXTENDER (LEGACY - KEPT FOR COMPATIBILITY) =====
-local function createHitboxForPlayer(player)
-    if not player or not player.Character then return end
-    removeHitboxForPlayer(player)
-    local targetPart = getTargetPart(player)
-    if not targetPart then 
-        print("No target part found for: " .. player.Name)
-        return 
-    end
-    
-    local hitbox = Instance.new("Part")
-    hitbox.Name = "ExtendedHitbox"
-    hitbox.Anchored = false
-    hitbox.CanCollide = true
-    hitbox.Massless = true
-    hitbox.Transparency = config.hitboxTransparency or 0.5
-    hitbox.Color = config.hitboxColor or Color3.fromRGB(255, 0, 0)
-    hitbox.Material = Enum.Material.Neon
-    hitbox.Size = targetPart.Size * (config.hitboxSize or 1.5)
-    
-    local weld = Instance.new("Weld")
-    weld.Part0 = targetPart
-    weld.Part1 = hitbox
-    weld.C0 = CFrame.new(0, 0, 0)
-    weld.Parent = hitbox
-    hitbox.Parent = player.Character
-    
-    local connection = hitbox.Touched:Connect(function(hit)
-        if hit and hit.Parent then
-            local isBullet = hit.Name:match("Bullet") or hit.Name:match("Projectile")
-            if isBullet then
-                local velocity = Vector3.new(0, 0, 0)
-                local velProp = hit:FindFirstChild("Velocity")
-                if velProp then
-                    if type(velProp.Value) == "Vector3" then
-                        velocity = velProp.Value
-                    elseif type(velProp.Value) == "number" then
-                        local dir = (hit.Position - hit.Parent.Position).Unit
-                        velocity = dir * velProp.Value
-                    end
-                end
-                fireHitRemote(player, velocity)
+-- ===== CONTINUOUS SCAN FOR NEW CASTERS =====
+local function StartContinuousScan()
+    task.spawn(function()
+        local attempts = 0
+        while attempts < 15 and not tracerHooked do
+            attempts = attempts + 1
+            task.wait(3)
+            
+            -- Try scanning for ActiveCasts first (more reliable)
+            local hooked = ScanGCForActiveCasts()
+            if hooked > 0 then
+                print("[FastCast Tracer] Found and hooked " .. hooked .. " ActiveCast(s) on attempt " .. attempts)
+                break
             end
+            
+            -- Fallback to regular FastCast scan
+            hooked = ScanGCForFastCast()
+            if hooked > 0 then
+                print("[FastCast Tracer] Found and hooked " .. hooked .. " FastCast caster(s) on attempt " .. attempts)
+                break
+            end
+            
+            print("[FastCast Tracer] Scan attempt " .. attempts .. " - no casters found.")
+        end
+        
+        if tracerHooked then
+            print("[FastCast Tracer] Tracers are now active!")
+        else
+            print("[FastCast Tracer] No FastCast casters found after 15 attempts. Make sure you have a weapon equipped and try firing once.")
         end
     end)
+end
+
+-- ===== MAIN HOOK FUNCTION =====
+local function HookFastCastForTracers()
+    if tracerHooked then return true end
     
-    playerHitboxes[player] = { hitbox = hitbox, weld = weld, targetPart = targetPart, connection = connection }
-    print("Created hitbox for: " .. player.Name)
-end
-
-local function removeHitboxForPlayer(player)
-    if playerHitboxes[player] then
-        if playerHitboxes[player].hitbox then
-            pcall(function() playerHitboxes[player].hitbox:Destroy() end)
-        end
-        if playerHitboxes[player].connection then
-            pcall(function() playerHitboxes[player].connection:Disconnect() end)
-        end
-        playerHitboxes[player] = nil
-        print("Removed hitbox for: " .. player.Name)
-    end
-end
-
-local function updateAllHitboxes()
-    for player, _ in pairs(playerHitboxes) do
-        if not player or not player.Parent or not shouldExtendHitbox(player) then
-            removeHitboxForPlayer(player)
+    print("[FastCast Tracer] Attempting to hook FastCast...")
+    
+    -- Try different methods
+    local methods = {
+        HookGlobalFastCast,
+        HookFastCastNew,
+    }
+    
+    for _, method in ipairs(methods) do
+        if method() then
+            print("[FastCast Tracer] Hook successful!")
+            tracerHooked = true
+            return true
         end
     end
-    if config.hitboxEnabled then
-        for _, player in ipairs(Players:GetPlayers()) do
-            if shouldExtendHitbox(player) and not playerHitboxes[player] then
-                createHitboxForPlayer(player)
-            end
-        end
+    
+    -- If direct methods fail, scan GC for ActiveCasts
+    local hooked = ScanGCForActiveCasts()
+    if hooked > 0 then
+        tracerHooked = true
+        return true
     end
-end
-
--- ===== FIND HIT REMOTE =====
-local function findHitRemote()
-    local tools = ReplicatedStorage:FindFirstChild("Tools")
-    if tools then
-        local components = tools:FindFirstChild("Components")
-        if components then
-            local muzzle = components:FindFirstChild("Muzzle")
-            if muzzle then
-                hitRemote = muzzle:FindFirstChild("Hit")
-                if hitRemote then
-                    autoCalc.remoteFound = true
-                    autoCalc.remoteName = hitRemote.Name
-                    print("Found Hit remote!")
-                    return true
-                end
-            end
-        end
+    
+    -- Last resort: scan GC for FastCast casters
+    hooked = ScanGCForFastCast()
+    if hooked > 0 then
+        tracerHooked = true
+        return true
     end
+    
+    print("[FastCast Tracer] All hooking methods failed.")
     return false
 end
 
+-- ===== CLEANUP =====
+local function ClearTracers()
+    for _, tracer in ipairs(activeTracers) do
+        pcall(function() tracer:Destroy() end)
+    end
+    activeTracers = {}
+    hookedCasters = {}
+    print("[FastCast Tracer] Cleared all tracers and reset hooks.")
+end
+
+-- ===== UPDATE LOOP =====
+local function UpdateTracers()
+    -- Debris handles cleanup, but we can clean any orphaned tracers
+    for i, tracer in ipairs(activeTracers) do
+        if not tracer or not tracer.Parent then
+            table.remove(activeTracers, i)
+        end
+    end
+end
+
+-- ===== EXPOSE FUNCTIONS FOR UI =====
+_G.FastCastTracer = {
+    Enable = function()
+        if not tracerHooked then
+            HookFastCastForTracers()
+            StartContinuousScan()
+        else
+            print("[FastCast Tracer] Already active.")
+        end
+    end,
+    Disable = function()
+        ClearTracers()
+        tracerHooked = false
+        print("[FastCast Tracer] Disabled.")
+    end,
+    SetColor = function(color)
+        TracerColor = color
+        for _, tracer in ipairs(activeTracers) do
+            pcall(function() tracer.Color = color end)
+        end
+    end,
+    SetThickness = function(thickness)
+        TracerThickness = thickness
+    end,
+    SetFadeTime = function(time)
+        FadeTime = time
+    end,
+    Clear = ClearTracers,
+    Status = function()
+        return tracerHooked
+    end,
+    Scan = function()
+        return ScanGCForActiveCasts()
+    end
+}
+
+-- ===== TRACER UPDATE LOOP =====
+task.spawn(function()
+    while task.wait(0.1) do
+        pcall(UpdateTracers)
+    end
+end)
 -- ===== PING DETECTION =====
 local function detectPing()
     local statsData = Stats:FindFirstChild("Data")
@@ -878,18 +1059,11 @@ local function detectPing()
     return autoCalc.ping
 end
 
--- ===== IMPROVED VELOCITY TRACKING =====
+-- ===== VELOCITY TRACKING =====
 local function updateTargetVelocities()
     local dt = 0.05
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= plr and player.Character and player.Character.Parent then
-            local isMounted = false
-            if player.Character:FindFirstChild("Horse") or 
-               player.Character:FindFirstChild("Vehicle") or
-               player.Character:FindFirstChild("Mount") then
-                isMounted = true
-            end
-            
             local targetPart = getTargetPart(player)
             if targetPart and targetPart.Parent then
                 local currentPos = targetPart.Position
@@ -898,8 +1072,7 @@ local function updateTargetVelocities()
                     local rawVelocity = delta / dt
                     
                     if targetVelocities[player] then
-                        local smoothingFactor = isMounted and 0.5 or 0.7
-                        targetVelocities[player] = targetVelocities[player] * smoothingFactor + rawVelocity * (1 - smoothingFactor)
+                        targetVelocities[player] = targetVelocities[player] * 0.7 + rawVelocity * 0.3
                     else
                         targetVelocities[player] = rawVelocity
                     end
@@ -915,7 +1088,7 @@ local function updateTargetVelocities()
     end
 end
 
--- ===== AUTO-CALCULATE PREDICTION VALUES =====
+-- ===== AUTO-CALCULATE PREDICTION =====
 local function autoCalculateValues(targetPart, player, distance, bulletTravelTime)
     if not config.autoPrediction and not config.autoBulletDrop then
         return
@@ -941,7 +1114,6 @@ local function autoCalculateValues(targetPart, player, distance, bulletTravelTim
         return
     end
     
-    -- ===== AUTO LEAD CALCULATION =====
     if config.autoPrediction then
         local toTarget = (targetPart.Position - Camera.CFrame.Position).Unit
         local angle = math.acos(math.clamp(toTarget:Dot(targetVelocity.Unit), -1, 1))
@@ -977,7 +1149,6 @@ local function autoCalculateValues(targetPart, player, distance, bulletTravelTim
         end
     end
     
-    -- ===== AUTO BULLET DROP CALCULATION =====
     if config.autoBulletDrop then
         local travelTime = distance / config.bulletVelocity
         if travelTime < 0.01 then travelTime = 0.01 end
@@ -1031,7 +1202,6 @@ local function predictPosition(targetPart, player)
         autoCalculateValues(targetPart, player, distance, bulletTravelTime)
     end
     
-    -- ===== MOVEMENT PREDICTION =====
     if config.autoPrediction and targetVelocities[player] then
         local velocity = targetVelocities[player]
         if velocity and velocity.Magnitude > 1 then
@@ -1057,7 +1227,6 @@ local function predictPosition(targetPart, player)
         end
     end
     
-    -- ===== BULLET DROP COMPENSATION =====
     local drop = 0
     if config.bulletDrop > 0 then
         local predDist = (basePosition - cameraPos).Magnitude
@@ -1167,7 +1336,7 @@ local function onRenderStepped()
     end
 end
 
--- ===== ESP FUNCTIONS (SMOOTH UPDATES ON RENDERSTEPPED) =====
+-- ===== ESP FUNCTIONS =====
 local function isPlayerBehindWall(player)
     if not player or not player.Character then return false end
     
@@ -1186,11 +1355,6 @@ local function isPlayerBehindWall(player)
     local result = Workspace:Raycast(origin, direction * distance, rayParams)
     
     if result and result.Instance then
-        local hitPlayer = getPlayerFromPart(result.Instance)
-        if hitPlayer == player then
-            return false
-        end
-        
         local character = result.Instance.Parent
         while character do
             if character == player.Character then
@@ -1198,7 +1362,6 @@ local function isPlayerBehindWall(player)
             end
             character = character.Parent
         end
-        
         return true
     end
     
@@ -1239,7 +1402,6 @@ local function getESPColorForPlayer(player)
     end
 end
 
--- ===== GET BOUNDING BOX =====
 local function getBoundingBox(character)
     local min = Vector2.new(math.huge, math.huge)
     local max = Vector2.new(-math.huge, -math.huge)
@@ -1290,7 +1452,6 @@ local function getBoundingBox(character)
     return min, max, onscreen
 end
 
--- ===== CREATE ESP OBJECTS FOR A PLAYER =====
 local function createESPForPlayer(player)
     if not player or player == plr then
         return
@@ -1390,7 +1551,6 @@ local function createESPForPlayer(player)
     return espData
 end
 
--- ===== UPDATE ESP FOR A PLAYER =====
 local function updateESPForPlayer(player)
     local espData = espObjects[player]
     if not espData then
@@ -1398,7 +1558,6 @@ local function updateESPForPlayer(player)
     end
     
     if not player or not player.Character then
-        -- Hide all ESP elements
         if espData.box then espData.box.Visible = false end
         if espData.boxOutline then espData.boxOutline.Visible = false end
         if espData.healthbar then espData.healthbar.Visible = false end
@@ -1450,7 +1609,6 @@ local function updateESPForPlayer(player)
     
     local min, max, onscreen = getBoundingBox(player.Character)
     if not onscreen then
-        -- Hide all ESP elements when off-screen
         if espData.box then espData.box.Visible = false end
         if espData.boxOutline then espData.boxOutline.Visible = false end
         if espData.healthbar then espData.healthbar.Visible = false end
@@ -1523,52 +1681,61 @@ local function updateESPForPlayer(player)
     end
 end
 
--- ===== UPDATE ALL ESP (CALLED EVERY RENDER STEP) =====
-local function updateAllESP()
-    -- Remove ESP for players that no longer exist
-    for player, espData in pairs(espObjects) do
-        if not player or not player.Parent or player == plr then
-            if espData.box then pcall(function() espData.box:Remove() end) end
-            if espData.boxOutline then pcall(function() espData.boxOutline:Remove() end) end
-            if espData.healthbar then pcall(function() espData.healthbar:Remove() end) end
-            if espData.healthbg then pcall(function() espData.healthbg:Remove() end) end
-            if espData.nameText then pcall(function() espData.nameText:Remove() end) end
-            if espData.distanceText then pcall(function() espData.distanceText:Remove() end) end
-            if espData.tracer then pcall(function() espData.tracer:Remove() end) end
-            espObjects[player] = nil
-        end
-    end
-    
-    -- Create ESP for new players
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= plr and not espObjects[player] then
-            if config.espEnabled then
-                if player.Character then
-                    local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
-                    if humanoid and humanoid.Health > 0 then
-                        createESPForPlayer(player)
+-- ===== ESP UPDATE LOOP =====
+connections.espUpdate = task.spawn(function()
+    while task.wait(1) do
+        -- Update bullet tracers
+        pcall(updateBulletTracers)
+        
+        if config.espEnabled then
+            pcall(function()
+                -- Remove ESP for players that no longer exist
+                for player, espData in pairs(espObjects) do
+                    if not player or not player.Parent or player == plr then
+                        if espData.box then pcall(function() espData.box:Remove() end) end
+                        if espData.boxOutline then pcall(function() espData.boxOutline:Remove() end) end
+                        if espData.healthbar then pcall(function() espData.healthbar:Remove() end) end
+                        if espData.healthbg then pcall(function() espData.healthbg:Remove() end) end
+                        if espData.nameText then pcall(function() espData.nameText:Remove() end) end
+                        if espData.distanceText then pcall(function() espData.distanceText:Remove() end) end
+                        if espData.tracer then pcall(function() espData.tracer:Remove() end) end
+                        espObjects[player] = nil
                     end
                 end
-            end
+                
+                -- Create ESP for new players
+                for _, player in ipairs(Players:GetPlayers()) do
+                    if player ~= plr and not espObjects[player] then
+                        if config.espEnabled then
+                            if player.Character then
+                                local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
+                                if humanoid and humanoid.Health > 0 then
+                                    createESPForPlayer(player)
+                                end
+                            end
+                        end
+                    end
+                end
+                
+                -- Update ESP for all players
+                for player, _ in pairs(espObjects) do
+                    if config.espEnabled then
+                        updateESPForPlayer(player)
+                    else
+                        local espData = espObjects[player]
+                        if espData.box then espData.box.Visible = false end
+                        if espData.boxOutline then espData.boxOutline.Visible = false end
+                        if espData.healthbar then espData.healthbar.Visible = false end
+                        if espData.healthbg then espData.healthbg.Visible = false end
+                        if espData.nameText then espData.nameText.Visible = false end
+                        if espData.distanceText then espData.distanceText.Visible = false end
+                        if espData.tracer then espData.tracer.Visible = false end
+                    end
+                end
+            end)
         end
     end
-    
-    -- Update ESP for all players
-    for player, _ in pairs(espObjects) do
-        if config.espEnabled then
-            updateESPForPlayer(player)
-        else
-            local espData = espObjects[player]
-            if espData.box then espData.box.Visible = false end
-            if espData.boxOutline then espData.boxOutline.Visible = false end
-            if espData.healthbar then espData.healthbar.Visible = false end
-            if espData.healthbg then espData.healthbg.Visible = false end
-            if espData.nameText then espData.nameText.Visible = false end
-            if espData.distanceText then espData.distanceText.Visible = false end
-            if espData.tracer then espData.tracer.Visible = false end
-        end
-    end
-end
+end)
 
 -- ===== HANDLE PLAYER RESPAWN =====
 local function setupPlayerRespawnHandler(player)
@@ -1605,9 +1772,7 @@ local function setupPlayerRespawnHandler(player)
         end
         if config.hitboxEnabled then
             task.wait(0.5)
-            if shouldExtendHitbox(player) then
-                createHitboxForPlayer(player)
-            end
+            applyHitbox(player)
         end
         if charAddedConn then
             charAddedConn:Disconnect()
@@ -1625,11 +1790,11 @@ local Window = Library:CreateWindow({
     ToggleKey = Enum.KeyCode[config.guiToggleKey] or Enum.KeyCode.RightShift,
 })
 
--- ===== CREATE TABS =====
+-- ===== TABS =====
 local SilentAimTab = Window:AddTab("Silent Aim")
 local PredictionTab = Window:AddTab("Prediction")
-local ESPTab = Window:AddTab("ESP")
-local HitboxTab = Window:AddTab("Hitbox")
+local VisualsTab = Window:AddTab("Visuals")  -- Renamed from ESP
+local RageTab = Window:AddTab("Rage")
 local ChantTab = Window:AddTab("Chant")
 local SettingsTab = Window:AddTab("Settings")
 
@@ -1705,7 +1870,7 @@ PredictionGroup:AddToggle("AutoPrediction", {
 
 PredictionGroup:AddToggle("AutoBulletDrop", {
     Text = "Auto Bullet Drop",
-    Desc = "Automatically calculate bullet drop compensation based on distance, velocity, and gravity",
+    Desc = "Automatically calculate bullet drop compensation",
     Default = config.autoBulletDrop,
     Callback = function(v)
         config.autoBulletDrop = v
@@ -1718,9 +1883,9 @@ PredictionGroup:AddToggle("AutoBulletDrop", {
     end
 })
 
-local predictionSlider = PredictionGroup:AddSlider("PredictionMultiplier", {
+sliderElements.predictionSlider = PredictionGroup:AddSlider("PredictionMultiplier", {
     Text = "Prediction Multiplier",
-    Desc = "How much to lead moving targets (higher = more lead)",
+    Desc = "How much to lead moving targets",
     Default = config.prediction,
     Min = 0,
     Max = 1,
@@ -1730,10 +1895,9 @@ local predictionSlider = PredictionGroup:AddSlider("PredictionMultiplier", {
         autoCalc.calibrationValues.prediction.current = v
     end
 })
-sliderElements.predictionSlider = predictionSlider
 
-local velocitySlider = PredictionGroup:AddSlider("BulletVelocity", {
-    Text = "Bullet Velocity (Musket: 1300)",
+sliderElements.velocitySlider = PredictionGroup:AddSlider("BulletVelocity", {
+    Text = "Bullet Velocity",
     Desc = "Bullet speed in studs/second",
     Default = config.bulletVelocity,
     Min = 100,
@@ -1744,11 +1908,10 @@ local velocitySlider = PredictionGroup:AddSlider("BulletVelocity", {
         autoCalc.calibrationValues.bulletVelocity.current = v
     end
 })
-sliderElements.velocitySlider = velocitySlider
 
-local dropSlider = PredictionGroup:AddSlider("BulletDrop", {
+sliderElements.dropSlider = PredictionGroup:AddSlider("BulletDrop", {
     Text = "Bullet Drop (Gravity)",
-    Desc = "Gravitational acceleration in studs/s². Normal Roblox gravity is 196.2",
+    Desc = "Gravitational acceleration in studs/s²",
     Default = config.bulletDrop,
     Min = 0,
     Max = 250,
@@ -1758,9 +1921,8 @@ local dropSlider = PredictionGroup:AddSlider("BulletDrop", {
         autoCalc.calibrationValues.bulletDrop.current = v
     end
 })
-sliderElements.dropSlider = dropSlider
 
-local compensationSlider = PredictionGroup:AddSlider("DropCompensation", {
+sliderElements.compensationSlider = PredictionGroup:AddSlider("DropCompensation", {
     Text = "Drop Compensation",
     Desc = "Multiplier for bullet drop compensation",
     Default = config.gravityCompensation,
@@ -1772,7 +1934,6 @@ local compensationSlider = PredictionGroup:AddSlider("DropCompensation", {
         autoCalc.calibrationValues.gravityCompensation.current = v
     end
 })
-sliderElements.compensationSlider = compensationSlider
 
 PredictionGroup:AddSlider("LongRangeCompensation", {
     Text = "Long Range Drop Bonus",
@@ -1807,15 +1968,15 @@ PredictionGroup:AddToggle("DebugMode", {
 
 PredictionGroup:AddLabel("Weapon Info")
 PredictionGroup:AddLabel("Musket Velocity: 1300 studs/s")
-PredictionGroup:AddLabel("Velocity Deviation: ±60 (speed variation)")
+PredictionGroup:AddLabel("Velocity Deviation: ±60")
 PredictionGroup:AddLabel("Deviation: 1.7 (accuracy/spread)")
 PredictionGroup:AddLabel("Base Damage: 100 | Min: 80")
 PredictionGroup:AddLabel("Effective Range: 250-600 studs")
 
--- ===== ESP TAB =====
-local ESPGroup = ESPTab:AddLeftGroupbox("ESP Settings")
+-- ===== VISUALS TAB (Formerly ESP) =====
+local VisualsLeftGroup = VisualsTab:AddLeftGroupbox("ESP Settings")
 
-ESPGroup:AddToggle("ESPEnabled", {
+VisualsLeftGroup:AddToggle("ESPEnabled", {
     Text = "ESP Enabled",
     Default = config.espEnabled,
     Callback = function(v)
@@ -1842,7 +2003,7 @@ ESPGroup:AddToggle("ESPEnabled", {
     end
 })
 
-ESPGroup:AddToggle("ESPTeamCheck", {
+VisualsLeftGroup:AddToggle("ESPTeamCheck", {
     Text = "Team Check",
     Default = config.espTeamCheck,
     Callback = function(v)
@@ -1868,7 +2029,7 @@ ESPGroup:AddToggle("ESPTeamCheck", {
     end
 })
 
-ESPGroup:AddToggle("ESPWallCheck", {
+VisualsLeftGroup:AddToggle("ESPWallCheck", {
     Text = "Wall Check",
     Desc = "Change ESP colors when players are behind walls",
     Default = config.espWallCheck,
@@ -1877,10 +2038,10 @@ ESPGroup:AddToggle("ESPWallCheck", {
     end
 })
 
-ESPGroup:AddDivider()
-ESPGroup:AddLabel("ESP Elements")
+VisualsLeftGroup:AddDivider()
+VisualsLeftGroup:AddLabel("ESP Elements")
 
-ESPGroup:AddToggle("ESPBoxEnabled", {
+VisualsLeftGroup:AddToggle("ESPBoxEnabled", {
     Text = "Bounding Box",
     Default = config.espBoxEnabled,
     Callback = function(v)
@@ -1906,7 +2067,7 @@ ESPGroup:AddToggle("ESPBoxEnabled", {
     end
 })
 
-ESPGroup:AddToggle("ESPHealthbarEnabled", {
+VisualsLeftGroup:AddToggle("ESPHealthbarEnabled", {
     Text = "Health Bar",
     Default = config.espHealthbarEnabled,
     Callback = function(v)
@@ -1914,7 +2075,7 @@ ESPGroup:AddToggle("ESPHealthbarEnabled", {
     end
 })
 
-ESPGroup:AddToggle("ESPNameEnabled", {
+VisualsLeftGroup:AddToggle("ESPNameEnabled", {
     Text = "Player Names",
     Default = config.espNameEnabled,
     Callback = function(v)
@@ -1922,7 +2083,7 @@ ESPGroup:AddToggle("ESPNameEnabled", {
     end
 })
 
-ESPGroup:AddToggle("ESPDistanceEnabled", {
+VisualsLeftGroup:AddToggle("ESPDistanceEnabled", {
     Text = "Distance",
     Default = config.espDistanceEnabled,
     Callback = function(v)
@@ -1930,30 +2091,18 @@ ESPGroup:AddToggle("ESPDistanceEnabled", {
     end
 })
 
-ESPGroup:AddToggle("ESPTracerEnabled", {
-    Text = "Tracer",
+VisualsLeftGroup:AddToggle("ESPTracerEnabled", {
+    Text = "ESP Tracers",
     Default = config.espTracerEnabled,
     Callback = function(v)
         config.espTracerEnabled = v
-        -- Force refresh ESP when tracer is toggled
-        if config.espEnabled then
-            for player, espData in pairs(espObjects) do
-                if espData.tracer then
-                    if v then
-                        -- Tracer enabled, will be shown in update loop
-                    else
-                        espData.tracer.Visible = false
-                    end
-                end
-            end
-        end
     end
 })
 
-ESPGroup:AddDivider()
-ESPGroup:AddLabel("Colors")
+VisualsLeftGroup:AddDivider()
+VisualsLeftGroup:AddLabel("Colors")
 
-local visibleColorLabel = ESPGroup:AddLabel("Visible Color")
+local visibleColorLabel = VisualsLeftGroup:AddLabel("Visible Color")
 visibleColorLabel:AddColorPicker("ESPVisibleColor", {
     Default = config.espVisibleColor,
     Callback = function(v)
@@ -1961,7 +2110,7 @@ visibleColorLabel:AddColorPicker("ESPVisibleColor", {
     end
 })
 
-local hiddenColorLabel = ESPGroup:AddLabel("Hidden/Wall Color")
+local hiddenColorLabel = VisualsLeftGroup:AddLabel("Hidden/Wall Color")
 hiddenColorLabel:AddColorPicker("ESPHiddenColor", {
     Default = config.espHiddenColor,
     Callback = function(v)
@@ -1969,7 +2118,7 @@ hiddenColorLabel:AddColorPicker("ESPHiddenColor", {
     end
 })
 
-ESPGroup:AddToggle("ESPUseTeamColor", {
+VisualsLeftGroup:AddToggle("ESPUseTeamColor", {
     Text = "Use Team Color",
     Default = config.espUseTeamColor,
     Callback = function(v)
@@ -1977,7 +2126,7 @@ ESPGroup:AddToggle("ESPUseTeamColor", {
     end
 })
 
-ESPGroup:AddButton({
+VisualsLeftGroup:AddButton({
     Text = "Refresh ESP",
     Func = function()
         if config.espEnabled then
@@ -2004,42 +2153,119 @@ ESPGroup:AddButton({
     end
 })
 
--- ===== HITBOX TAB =====
-local HitboxGroup = HitboxTab:AddLeftGroupbox("Hitbox Extender")
+-- ===== TRACERS (Right Groupbox) =====
+local TracersGroup = VisualsTab:AddRightGroupbox("Bullet Tracers")
 
-HitboxGroup:AddToggle("HitboxEnabled", {
+TracersGroup:AddToggle("BulletTracerEnabled", {
+    Text = "Bullet Tracers",
+    Desc = "Show trajectory beams using FastCast LengthChanged",
+    Default = config.bulletTracerEnabled,
+    Callback = function(v)
+        config.bulletTracerEnabled = v
+        if v then
+            if _G.FastCastTracer then
+                _G.FastCastTracer.Enable()
+            else
+                -- Try to initialize
+                InitializeGCScan()
+                StartContinuousScan()
+            end
+            print("Bullet tracers enabled!")
+        else
+            if _G.FastCastTracer then
+                _G.FastCastTracer.Disable()
+            end
+            print("Bullet tracers disabled!")
+        end
+    end
+})
+
+local tracerColorLabel = TracersGroup:AddLabel("Tracer Color")
+tracerColorLabel:AddColorPicker("BulletTracerColor", {
+    Default = config.bulletTracerColor,
+    Callback = function(v)
+        config.bulletTracerColor = v
+        if _G.FastCastTracer then
+            _G.FastCastTracer.SetColor(v)
+        end
+    end
+})
+
+TracersGroup:AddSlider("BulletTracerDuration", {
+    Text = "Tracer Fade Time (Seconds)",
+    Default = config.bulletTracerDuration,
+    Min = 0.05,
+    Max = 5,
+    Rounding = 1,
+    Callback = function(v)
+        config.bulletTracerDuration = v
+        if _G.FastCastTracer then
+            _G.FastCastTracer.SetFadeTime(v)
+        end
+    end
+})
+
+TracersGroup:AddSlider("BulletTracerThickness", {
+    Text = "Tracer Thickness",
+    Default = config.bulletTracerThickness,
+    Min = 0.05,
+    Max = 5,
+    Rounding = 1,
+    Callback = function(v)
+        config.bulletTracerThickness = v
+        if _G.FastCastTracer then
+            _G.FastCastTracer.SetThickness(v)
+        end
+    end
+})
+
+TracersGroup:AddButton({
+    Text = "Clear Tracers",
+    Func = function()
+        if _G.FastCastTracer then
+            _G.FastCastTracer.Clear()
+        else
+            ClearTracers()
+        end
+    end
+})
+
+TracersGroup:AddButton({
+    Text = "Force Scan FastCast",
+    Func = function()
+        print("Force scanning for FastCast casters...")
+        InitializeGCScan()
+        StartContinuousScan()
+    end
+})
+
+-- ===== RAGE TAB =====
+local RageGroup = RageTab:AddLeftGroupbox("Hitbox Extender")
+
+RageGroup:AddToggle("HitboxEnabled", {
     Text = "Hitbox Extender",
     Default = config.hitboxEnabled,
     Callback = function(v)
         config.hitboxEnabled = v
         if v then
-            -- Apply hitbox expansion to all players
             applyHitboxToAllPlayers()
-            -- Legacy hitbox system for FastCast
-            updateAllHitboxes()
-            hookFastCastRedux()
-            hookHitRemote()
+            print("Hitbox extender enabled!")
         else
-            -- Reset all expanded hitboxes
             resetAllExpanded()
-            -- Clean up legacy hitboxes
-            for player, _ in pairs(playerHitboxes) do
-                removeHitboxForPlayer(player)
-            end
+            print("Hitbox extender disabled!")
         end
     end
 })
 
-HitboxGroup:AddSlider("HitboxSize", {
+RageGroup:AddSlider("HitboxSize", {
     Text = "Hitbox Size",
     Default = config.hitboxSize,
     Min = 0.5,
-    Max = 50,
-    Rounding = 1,
+    Max = 15,  -- Changed from 50 to 15
+    Rounding = 0,
     Callback = function(v)
         config.hitboxSize = v
         if config.hitboxEnabled then
-            -- Update all expanded hitboxes
             for player, _ in pairs(Expanded) do
                 if player and player.Character then
                     local hrp = player.Character:FindFirstChild("HumanoidRootPart")
@@ -2050,24 +2276,15 @@ HitboxGroup:AddSlider("HitboxSize", {
                     end
                 end
             end
-            -- Recreate legacy hitboxes
-            for player, _ in pairs(playerHitboxes) do
-                removeHitboxForPlayer(player)
-            end
-            updateAllHitboxes()
         end
     end
 })
 
-local colorLabel = HitboxGroup:AddLabel("Hitbox Color")
+local colorLabel = RageGroup:AddLabel("Hitbox Color")
 colorLabel:AddColorPicker("HitboxColor", {
     Default = config.hitboxColor,
     Callback = function(v)
         config.hitboxColor = v
-        for _, data in pairs(playerHitboxes) do
-            if data.hitbox then pcall(function() data.hitbox.Color = v end) end
-        end
-        -- Update expanded hitbox colors (they use BrickColor)
         for player, _ in pairs(Expanded) do
             if player and player.Character then
                 local hrp = player.Character:FindFirstChild("HumanoidRootPart")
@@ -2081,7 +2298,7 @@ colorLabel:AddColorPicker("HitboxColor", {
     end
 })
 
-HitboxGroup:AddSlider("HitboxTransparency", {
+RageGroup:AddSlider("HitboxTransparency", {
     Text = "Hitbox Transparency",
     Default = config.hitboxTransparency,
     Min = 0,
@@ -2089,9 +2306,6 @@ HitboxGroup:AddSlider("HitboxTransparency", {
     Rounding = 2,
     Callback = function(v)
         config.hitboxTransparency = v
-        for _, data in pairs(playerHitboxes) do
-            if data.hitbox then pcall(function() data.hitbox.Transparency = v end) end
-        end
         for player, _ in pairs(Expanded) do
             if player and player.Character then
                 local hrp = player.Character:FindFirstChild("HumanoidRootPart")
@@ -2105,7 +2319,7 @@ HitboxGroup:AddSlider("HitboxTransparency", {
     end
 })
 
-HitboxGroup:AddToggle("HitboxTeamCheck", {
+RageGroup:AddToggle("HitboxTeamCheck", {
     Text = "Team Check",
     Default = config.hitboxTeamCheck,
     Callback = function(v)
@@ -2113,44 +2327,80 @@ HitboxGroup:AddToggle("HitboxTeamCheck", {
         if config.hitboxEnabled then
             resetAllExpanded()
             applyHitboxToAllPlayers()
-            for player, _ in pairs(playerHitboxes) do
-                removeHitboxForPlayer(player)
-            end
-            updateAllHitboxes()
+            reapplyPromptsForAll()
         end
     end
 })
 
-HitboxGroup:AddDropdown("HitboxPart", {
-    Text = "Target Part",
-    Values = {"Head", "Torso", "HumanoidRootPart"},
-    Default = 1,
-    Callback = function(v)
-        config.hitboxPart = v
-        if config.hitboxEnabled then
-            for player, _ in pairs(playerHitboxes) do
-                removeHitboxForPlayer(player)
-            end
-            updateAllHitboxes()
-        end
-    end
-})
-
-HitboxGroup:AddButton({
+RageGroup:AddButton({
     Text = "Refresh Hitboxes",
     Func = function()
         if config.hitboxEnabled then
             resetAllExpanded()
             applyHitboxToAllPlayers()
-            for player, _ in pairs(playerHitboxes) do
-                removeHitboxForPlayer(player)
-            end
-            updateAllHitboxes()
-            hookFastCastRedux()
-            hookHitRemote()
             print("Hitboxes refreshed!")
         else
             print("Hitbox extender is disabled. Enable it first.")
+        end
+    end
+})
+
+-- ===== FLAG TECH =====
+local FlagGroup = RageTab:AddRightGroupbox("Flag Tech")
+
+FlagGroup:AddToggle("FlagTechEnabled", {
+    Text = "Flag Tech Enabled",
+    Default = config.flagTechEnabled,
+    Callback = function(v)
+        config.flagTechEnabled = v
+        if v then
+            reapplyPromptsForAll()
+            print("Flag Tech enabled!")
+        else
+            reapplyPromptsForAll()
+            print("Flag Tech disabled!")
+        end
+    end
+})
+
+FlagGroup:AddSlider("HoldDuration", {
+    Text = "Pickup Time (Seconds)",
+    Default = config.flagHoldDuration,
+    Min = 0.5,
+    Max = 3,
+    Rounding = 1,
+    Callback = function(v)
+        config.flagHoldDuration = v
+        HOLD_DURATION = v
+        if config.flagTechEnabled then
+            reapplyPromptsForAll()
+        end
+    end
+})
+
+FlagGroup:AddSlider("MaxDistance", {
+    Text = "Max Distance",
+    Default = config.flagMaxDistance,
+    Min = 3,
+    Max = 15,
+    Rounding = 1,
+    Callback = function(v)
+        config.flagMaxDistance = v
+        MAX_DISTANCE = v
+        if config.flagTechEnabled then
+            reapplyPromptsForAll()
+        end
+    end
+})
+
+FlagGroup:AddButton({
+    Text = "Refresh Flag Tech",
+    Func = function()
+        if config.flagTechEnabled then
+            reapplyPromptsForAll()
+            print("Flag Tech refreshed!")
+        else
+            print("Flag Tech is disabled. Enable it first.")
         end
     end
 })
@@ -2199,28 +2449,37 @@ toggleKeyLabel:AddKeyPicker("ToggleKey", {
         if connections.toggleKeybind then
             connections.toggleKeybind:Disconnect()
         end
-        connections.toggleKeybind = UserInputService.InputBegan:Connect(function(input, gameProcessed)
-            if gameProcessed then return end
-            if input.KeyCode == Enum.KeyCode[keyString] then
-                config.enabled = not config.enabled
-                if Toggles and Toggles.Enabled then
-                    Toggles.Enabled:SetValue(config.enabled)
-                end
-                if fovCircle then fovCircle.Visible = config.showFOV and config.enabled end
-            end
+        
+        -- Try to get the Enum.KeyCode safely
+        local success, keyCode = pcall(function()
+            return Enum.KeyCode[keyString]
         end)
-    end
-})
-
-local guiKeyLabel = SettingsGroup:AddLabel("Toggle GUI")
-guiKeyLabel:AddKeyPicker("GUIToggleKey", {
-    Text = "Toggle GUI",
-    Default = config.guiToggleKey,
-    Mode = "Toggle",
-    ChangedCallback = function(v)
-        local keyString = type(v) == "string" and v or tostring(v)
-        config.guiToggleKey = keyString
-        Window:SetToggleKey(Enum.KeyCode[keyString])
+        
+        if success and keyCode then
+            connections.toggleKeybind = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+                if gameProcessed then return end
+                if input.KeyCode == keyCode then
+                    config.enabled = not config.enabled
+                    if Toggles and Toggles.Enabled then
+                        Toggles.Enabled:SetValue(config.enabled)
+                    end
+                    if fovCircle then fovCircle.Visible = config.showFOV and config.enabled end
+                end
+            end)
+        else
+            warn("Invalid key for Silent Aim toggle: " .. keyString)
+            -- Fallback to Delete key
+            connections.toggleKeybind = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+                if gameProcessed then return end
+                if input.KeyCode == Enum.KeyCode.Delete then
+                    config.enabled = not config.enabled
+                    if Toggles and Toggles.Enabled then
+                        Toggles.Enabled:SetValue(config.enabled)
+                    end
+                    if fovCircle then fovCircle.Visible = config.showFOV and config.enabled end
+                end
+            end)
+        end
     end
 })
 
@@ -2232,22 +2491,18 @@ ActionsGroup:AddButton({
         if config.hitboxEnabled then
             resetAllExpanded()
             applyHitboxToAllPlayers()
-            for player, _ in pairs(playerHitboxes) do
-                removeHitboxForPlayer(player)
-            end
-            updateAllHitboxes()
-            hookFastCastRedux()
-            hookHitRemote()
             print("Hitboxes refreshed!")
         end
     end
 })
 
 ActionsGroup:AddButton({
-    Text = "Force Hook FastCast",
+    Text = "Refresh Flag Tech",
     Func = function()
-        local success = hookFastCastRedux()
-        print(success and "FastCast hooked!" or "Failed to hook FastCast")
+        if config.flagTechEnabled then
+            reapplyPromptsForAll()
+            print("Flag Tech refreshed!")
+        end
     end
 })
 
@@ -2266,6 +2521,15 @@ ThemeManager:ApplyToTab(SettingsTab)
 -- ===== INITIALIZATION =====
 createFOVCircle()
 
+task.spawn(function()
+    task.wait(2) -- Wait for game to load
+    HookFastCastForTracers()
+    StartContinuousScan()
+end)
+
+print("[FastCast Tracer] Script loaded. Tracers will appear when you fire a FastCast weapon.")
+print("[FastCast Tracer] Use _G.FastCastTracer.Scan() to manually scan for casters.")
+
 connections.toggleKeybind = UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
     if input.KeyCode == Enum.KeyCode[config.toggleKey] then
@@ -2277,25 +2541,32 @@ connections.toggleKeybind = UserInputService.InputBegan:Connect(function(input, 
     end
 end)
 
-task.wait(1)
-findHitRemote()
-
-if config.hitboxEnabled then
-    task.wait(0.5)
-    applyHitboxToAllPlayers()
-    updateAllHitboxes()
-    hookFastCastRedux()
-    hookHitRemote()
+-- Connect existing players for hitbox and flag tech
+for _, player in ipairs(Players:GetPlayers()) do
+    if player ~= plr then
+        onPlayerAdded(player)
+    end
 end
 
--- Setup ESP update loop on RenderStepped (smooth, every frame)
-connections.espUpdate = RunService.RenderStepped:Connect(function()
-    if config.espEnabled then
-        pcall(updateAllESP)
+-- Future players
+Players.PlayerAdded:Connect(function(player)
+    if player ~= plr then
+        onPlayerAdded(player)
     end
 end)
 
--- Setup player respawn handlers
+-- Initial apply if enabled
+if config.hitboxEnabled then
+    task.wait(0.5)
+    applyHitboxToAllPlayers()
+end
+
+if config.flagTechEnabled then
+    task.wait(0.5)
+    reapplyPromptsForAll()
+end
+
+-- Setup player respawn handlers for ESP
 for _, player in ipairs(Players:GetPlayers()) do
     setupPlayerRespawnHandler(player)
 end
@@ -2308,17 +2579,11 @@ Players.PlayerAdded:Connect(function(player)
     end
     if config.hitboxEnabled then
         task.wait(0.5)
-        if shouldExtendHitbox(player) then
-            applyHitboxExpansion(player)
-            createHitboxForPlayer(player)
-        end
+        applyHitbox(player)
     end
 end)
 
 Players.PlayerRemoving:Connect(function(player)
-    if playerHitboxes[player] then
-        removeHitboxForPlayer(player)
-    end
     if Expanded[player] then
         Expanded[player] = nil
     end
@@ -2348,7 +2613,7 @@ connections.characterAdded = plr.CharacterAdded:Connect(function(character)
     
     if config.espEnabled then
         task.wait(0.5)
-        pcall(updateAllESP)
+        -- ESP will update on its own loop
     end
 end)
 
@@ -2362,42 +2627,14 @@ connections.velocityLoop = task.spawn(function()
     end
 end)
 
-connections.hitboxUpdate = task.spawn(function()
-    while task.wait(1) do
-        if config.hitboxEnabled then
-            pcall(updateAllHitboxes)
-        end
-    end
-end)
-
--- Monitor for hitbox size changes
-connections.mountedCheck = task.spawn(function()
-    local lastHitboxSize = config.hitboxSize
-    while task.wait(0.15) do
-        if config.hitboxEnabled and config.hitboxSize ~= lastHitboxSize then
-            lastHitboxSize = config.hitboxSize
-            for player, _ in pairs(Expanded) do
-                if player and player.Character then
-                    local hrp = player.Character:FindFirstChild("HumanoidRootPart")
-                    if hrp then
-                        pcall(function()
-                            hrp.Size = Vector3.new(config.hitboxSize, config.hitboxSize, config.hitboxSize)
-                        end)
-                    end
-                end
-            end
-        end
-    end
-end)
-
 task.wait(0.5)
 initChantPackage()
 
 print("VaM Client loaded successfully!")
 print("Musket Settings Applied:")
 print("  Velocity: " .. WEAPON_SETTINGS.Velocity .. " studs/s")
-print("  Velocity Deviation: ±" .. WEAPON_SETTINGS.VelocityDeviation .. " (speed variation)")
-print("  Deviation: " .. WEAPON_SETTINGS.Deviation .. " (accuracy/spread)")
+print("  Velocity Deviation: ±" .. WEAPON_SETTINGS.VelocityDeviation)
+print("  Deviation: " .. WEAPON_SETTINGS.Deviation)
 print("  Damage: " .. WEAPON_SETTINGS.BaseDamage .. "-" .. WEAPON_SETTINGS.MinDamage)
 print("  Range: " .. WEAPON_SETTINGS.BaseDmgDistance .. "-" .. WEAPON_SETTINGS.MinDmgDistance .. " studs")
 print("Press " .. config.toggleKey .. " to toggle silent aim")
