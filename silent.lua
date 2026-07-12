@@ -2346,8 +2346,8 @@ connections.mountedCheck = task.spawn(function()
     end
 end)
 
--- ===== AUTO REFRESH HITBOXES ON HEARTBEAT (HRP ONLY) =====
-connections.autoRefresh = RunService.Heartbeat:Connect(function()
+-- ===== AUTO REFRESH HITBOXES ON RENDERSTEPPED (HRP ONLY) =====
+connections.autoRefresh = RunService.RenderStepped:Connect(function()
     if config.hitboxEnabled then
         for _, player in ipairs(Players:GetPlayers()) do
             if player ~= plr and player.Character then
