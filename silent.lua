@@ -247,10 +247,8 @@ local function cleanup()
     end
     
     -- Clean up bullet tracers
-    for _, trace in pairs(bulletTraces) do
-        if trace.line then
-            pcall(function() trace.line:Remove() end)
-        end
+    for _, trace in pairs(bulletTraces or {}) do
+        if trace.line then pcall(function() trace.line:Remove() end) end
     end
     bulletTraces = {}
     
