@@ -41,18 +41,6 @@ local chantPackages = {
 
 -- ===== CONFIGURATION =====
 local config = {
-    -- Silent Aim Settings
-    silentAimEnabled = false,
-    silentAimFOV = 150,
-    silentAimTeamCheck = false,
-    silentAimWallCheck = false,
-    silentAimPart = "Head",
-    silentAimSmoothing = 0.15,
-    silentAimHitchance = 100,
-    silentAimDistance = 500,
-    silentAimFlagBearerPriority = false,
-    
-    -- Aimbot Settings
     enabled = false,
     fovRadius = 150,
     teamCheck = false,
@@ -121,13 +109,14 @@ local config = {
 local BulletTracers = {
     Config = {
         Enabled = false,
-        Color1 = Color3.fromRGB(255, 255, 255),
-        Lifetime = 3,
+        Color1 = Color3.fromRGB(255, 255, 255),  -- White as requested
+        Lifetime = 3,  -- 3 seconds
         FadeOut = true,
         Thickness = 2,
     }
 }
 
+-- Update the main config to link
 config.bulletTracerEnabled = BulletTracers.Config.Enabled
 config.bulletTracerColor = BulletTracers.Config.Color1
 config.bulletTracerDuration = BulletTracers.Config.Lifetime
@@ -138,7 +127,7 @@ local fovCircle = nil
 local lastTargetPos = {}
 local targetVelocities = {}
 local isUILoaded = false
-local bulletTraces = {}
+local bulletTraces = {} -- Table to store active bullet tracers
 
 -- ===== HITBOX STATE =====
 local Expanded = {}
@@ -173,7 +162,7 @@ local connections = {
     flagMonitor = nil,
     autoRefresh = nil,
     fastCastHook = nil,
-    bulletTracerUpdate = nil,
+    bulletTracerUpdate = nil,  -- Add this
 }
 
 -- ===== AUTO-CALCULATION =====
@@ -199,330 +188,7 @@ local autoCalc = {
     autoUpdateInterval = 0.5,
 }
 
--- ===== SILENT AIM V2 (FastCastRedux Compatible) =====
-local SilentAim = {
-    Config = {
-        Enabled = false,
-        Smoothing = 0.15,
-        Hitchance = 100,
-        Distance = 500,
-        VisibleCheck = false,
-        FlagBearerPriority = false,
-        Hitpart = "Head",
-    },
-    FOVConfig = {
-        Enabled = true,
-        Outline = false,
-        Visible = true,
-        Filled = false,
-        Radius = 150,
-        Thickness = 1,
-        NumSides = 60,
-        Transparency = 0.5,
-        Color = Color3.fromRGB(0, 255, 255),
-    },
-    FOVFillConfig = {
-        Transparency = 0.3,
-        Color = Color3.fromRGB(0, 255, 255),
-    },
-    Target = nil,
-    TargetPart = nil,
-    TargetPlayer = nil,
-}
-
--- ===== DRAWING OBJECTS =====
-local function CreateDrawingObject(drawingType, properties)
-    if not Drawing then return nil end
-    local obj = Drawing.new(drawingType)
-    if properties then
-        for key, value in pairs(properties) do
-            pcall(function() obj[key] = value end)
-        end
-    end
-    return obj
-end
-
-SilentAim.FOVCircle = CreateDrawingObject("Circle", {
-    Visible = false,
-    Color = SilentAim.FOVConfig.Color,
-    Transparency = SilentAim.FOVConfig.Transparency,
-    Thickness = SilentAim.FOVConfig.Thickness,
-    NumSides = SilentAim.FOVConfig.NumSides,
-    Filled = false,
-    Radius = SilentAim.FOVConfig.Radius,
-    ZIndex = 5,  -- Add ZIndex to make it draw behind aimbot
-})
-
-SilentAim.FOVCircleFill = CreateDrawingObject("Circle", {
-    Visible = false,
-    Color = SilentAim.FOVFillConfig.Color,
-    Transparency = SilentAim.FOVFillConfig.Transparency,
-    Thickness = 1,
-    NumSides = SilentAim.FOVConfig.NumSides,
-    Filled = true,
-    Radius = SilentAim.FOVConfig.Radius,
-	ZIndex = 5,
-})
-
-SilentAim.Line = CreateDrawingObject("Line", {
-    Visible = false,
-    Color = Color3.fromRGB(255, 255, 255),
-    Thickness = 1,
-    Transparency = 1,
-})
-
--- ===== HELPER FUNCTIONS =====
-local function IsWithinRadius(center, point, radius)
-    return (point - center).Magnitude <= radius
-end
-
-local function IsVisible(part)
-    if not part then return false end
-    local origin = Camera.CFrame.Position
-    local direction = (part.Position - origin).Unit
-    local distance = (part.Position - origin).Magnitude
-    
-    local rayParams = RaycastParams.new()
-    rayParams.FilterDescendantsInstances = {plr.Character}
-    rayParams.FilterType = Enum.RaycastFilterType.Blacklist
-    rayParams.IgnoreWater = true
-    
-    local result = Workspace:Raycast(origin, direction * distance, rayParams)
-    if result and result.Instance then
-        local char = result.Instance.Parent
-        while char do
-            if char == part.Parent then return true end
-            char = char.Parent
-        end
-        return false
-    end
-    return true
-end
-
--- ===== GET CLOSEST TARGET =====
-local function GetClosestTarget()
-    if not SilentAim.Config.Enabled then
-        return nil, nil
-    end
-    
-    if not plr.Character or not plr.Character.Parent then
-        return nil, nil
-    end
-    
-    local closestDistance = math.huge
-    local closestPlayer = nil
-    local closestPart = nil
-    local flagBearerDistance = math.huge
-    local flagBearerPlayer = nil
-    local flagBearerPart = nil
-    local flagBearerFound = false
-    local mousePos = UserInputService:GetMouseLocation()
-    local maxDistance = SilentAim.Config.Distance ^ 2
-    local cameraPos = Camera.CFrame.Position
-    
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player == plr then continue end
-        if SilentAim.Config.VisibleCheck and player.Team == plr.Team then continue end
-        
-        local char = player.Character
-        if not char then continue end
-        
-        local charDistance = cameraPos - char:GetPivot().Position
-        if charDistance:Dot(charDistance) > maxDistance then continue end
-        
-        local humanoid = char:FindFirstChildOfClass("Humanoid")
-        if not humanoid or humanoid.Health <= 0 then continue end
-        
-        local targetPart = char:FindFirstChild(SilentAim.Config.Hitpart) or char:FindFirstChild("Head")
-        if not targetPart then continue end
-        
-        local viewportPoint, onScreen = Camera:WorldToViewportPoint(targetPart.Position)
-        if not onScreen then continue end
-        
-        local screenPos = Vector2.new(viewportPoint.X, viewportPoint.Y)
-        local distToMouse = (mousePos - screenPos).Magnitude
-        
-        if SilentAim.FOVConfig.Enabled then
-            local fovCenter = SilentAim.FOVCircle.Position or mousePos
-            if not IsWithinRadius(fovCenter, screenPos, SilentAim.FOVConfig.Radius) then
-                continue
-            end
-        end
-        
-        if distToMouse > closestDistance then continue end
-        
-        if SilentAim.Config.VisibleCheck and not IsVisible(targetPart) then
-            continue
-        end
-        
-  		local isFlagBearer = false
-		local success, result = pcall(function()
-    		return player:GetAttribute("FlagBearer")
-		end)
-		if success then
-    		isFlagBearer = result or false
-		end
-
-        if SilentAim.Config.FlagBearerPriority and isFlagBearer then
-            flagBearerFound = true
-            if distToMouse < flagBearerDistance then
-                flagBearerDistance = distToMouse
-                flagBearerPlayer = player
-                flagBearerPart = targetPart
-            end
-        else
-            if not flagBearerFound and distToMouse < closestDistance then
-                closestDistance = distToMouse
-                closestPlayer = player
-                closestPart = targetPart
-            end
-        end
-    end
-    
-    if SilentAim.Config.FlagBearerPriority and flagBearerFound then
-        return flagBearerPlayer, flagBearerPart
-    end
-    
-    return closestPlayer, closestPart
-end
-
--- ===== UPDATE SILENT AIM =====
-local function UpdateSilentAim()
-    if not SilentAim.Config.Enabled then
-        SilentAim.FOVCircle.Visible = false
-        SilentAim.FOVCircleFill.Visible = false
-        SilentAim.Line.Visible = false
-        SilentAim.Target = nil
-        SilentAim.TargetPart = nil
-        SilentAim.TargetPlayer = nil
-        return
-    end
-    
-    local mousePos = UserInputService:GetMouseLocation()
-    local fovCenter = SilentAim.FOVCircle.Position or mousePos
-    local lerpedPos = fovCenter:Lerp(mousePos, 0.5)
-    
-    -- Update FOV Circle
-    if SilentAim.FOVConfig.Enabled then
-        SilentAim.FOVCircle.Position = lerpedPos
-        SilentAim.FOVCircle.Radius = SilentAim.FOVConfig.Radius
-        SilentAim.FOVCircle.Thickness = SilentAim.FOVConfig.Thickness
-        SilentAim.FOVCircle.NumSides = SilentAim.FOVConfig.NumSides
-        SilentAim.FOVCircle.Color = SilentAim.FOVConfig.Color
-        SilentAim.FOVCircle.Transparency = SilentAim.FOVConfig.Transparency
-        SilentAim.FOVCircle.Visible = SilentAim.FOVConfig.Visible
-        SilentAim.FOVCircle.ZIndex = 5
-        
-        if SilentAim.FOVConfig.Filled then
-            SilentAim.FOVCircleFill.Position = lerpedPos
-            SilentAim.FOVCircleFill.Radius = SilentAim.FOVConfig.Radius
-            SilentAim.FOVCircleFill.NumSides = SilentAim.FOVConfig.NumSides
-            SilentAim.FOVCircleFill.Color = SilentAim.FOVFillConfig.Color
-            SilentAim.FOVCircleFill.Transparency = SilentAim.FOVFillConfig.Transparency
-            SilentAim.FOVCircleFill.Visible = SilentAim.FOVConfig.Visible
-            SilentAim.FOVCircleFill.ZIndex = 4
-        else
-            SilentAim.FOVCircleFill.Visible = false
-        end
-    else
-        SilentAim.FOVCircle.Visible = false
-        SilentAim.FOVCircleFill.Visible = false
-    end
-    
-    -- Get target
-    local player, part = GetClosestTarget()
-    SilentAim.TargetPlayer = player
-    SilentAim.TargetPart = part
-    SilentAim.Target = player and player.Character
-    
-    -- Update line to target
-    if SilentAim.TargetPart and SilentAim.Line then
-        local aimVector = Camera:WorldToViewportPoint(SilentAim.TargetPart.Position)
-        if aimVector then
-            SilentAim.Line.Visible = true
-            SilentAim.Line.From = mousePos
-            SilentAim.Line.To = Vector2.new(aimVector.X, aimVector.Y)
-            SilentAim.Line.Color = SilentAim.FOVConfig.Color
-            SilentAim.Line.ZIndex = 6
-        end
-    else
-        SilentAim.Line.Visible = false
-    end
-end
-
--- ===== HOOK FASTCAST FOR SILENT AIM =====
-local function HookFastCastForSilentAim()
-    if not SilentAim.Config.Enabled then return false end
-    
-    local gcObjects = getgc(true)
-    local hookedCount = 0
-    
-    for _, obj in ipairs(gcObjects) do
-        if typeof(obj) == "table" then
-            local hasLengthChanged = pcall(function() 
-                return obj.LengthChanged ~= nil and typeof(obj.LengthChanged) == "table"
-            end)
-            
-            if hasLengthChanged then
-                local hasFire = pcall(function() 
-                    return obj.Fire ~= nil
-                end)
-                
-                if hasFire and obj.LengthChanged then
-                    if typeof(obj.LengthChanged) == "table" and obj.LengthChanged.Connect then
-                        if not obj._silentAimHooked then
-                            obj._silentAimHooked = true
-                            obj.LengthChanged:Connect(function(cast, lastPoint, rayDir, displacement, velocity, bulletPart)
-                                pcall(function()
-                                    if not SilentAim.Config.Enabled then return end
-                                    if not SilentAim.TargetPart then return end
-                                    
-                                    -- Hitchance check
-                                    local chance = SilentAim.Config.Hitchance / 100
-                                    if math.random() > chance then return end
-                                    
-                                    local targetPos = SilentAim.TargetPart.Position
-                                    local bulletSpeed = velocity.Magnitude
-                                    if bulletSpeed <= 0 then return end
-                                    
-                                    local distance = (targetPos - lastPoint).Magnitude
-                                    local travelTime = distance / (bulletSpeed + 1)
-                                    
-                                    -- Lead prediction using target velocity
-                                    local targetVelocity = targetVelocities[SilentAim.TargetPlayer] or Vector3.new(0, 0, 0)
-                                    local predictedPos = targetPos + (targetVelocity * travelTime * 0.5)
-                                    
-                                    local currentDirection = rayDir
-                                    local desiredDirection = (predictedPos - lastPoint).Unit
-                                    
-                                    if currentDirection:Dot(desiredDirection) > 0 then
-                                        local smoothing = SilentAim.Config.Smoothing
-                                        local newDirection = currentDirection:Lerp(desiredDirection, math.clamp(smoothing, 0, 1))
-                                        
-                                        -- Modify the bullet direction
-                                        if cast.RayInfo and cast.RayInfo.Parameters then
-                                            cast._modifiedDirection = newDirection
-                                        end
-                                    end
-                                end)
-                            end)
-                            hookedCount = hookedCount + 1
-                        end
-                    end
-                end
-            end
-        end
-    end
-    
-    return hookedCount > 0
-end
-
--- ===== EXPOSE FUNCTIONS =====
-_G.SilentAim = SilentAim
-_G.UpdateSilentAim = UpdateSilentAim
-_G.HookFastCastForSilentAim = HookFastCastForSilentAim
-
--- ===== FOV CIRCLE (Aimbot) =====
+-- ===== FOV CIRCLE =====
 local function createFOVCircle()
     if fovCircle then
         pcall(function() fovCircle:Remove() end)
@@ -542,7 +208,6 @@ local function createFOVCircle()
     fovCircle.Filled = false
     fovCircle.NumSides = 60
     fovCircle.Radius = config.fovRadius
-	fovCircle.ZIndex = 10
 end
 
 local function updateFOVCircle()
@@ -596,17 +261,6 @@ local function cleanup()
     if fovCircle then
         pcall(function() fovCircle:Remove() end)
         fovCircle = nil
-    end
-    
-    -- Clean up Silent Aim drawing objects
-    if SilentAim.FOVCircle then
-        pcall(function() SilentAim.FOVCircle:Remove() end)
-    end
-    if SilentAim.FOVCircleFill then
-        pcall(function() SilentAim.FOVCircleFill:Remove() end)
-    end
-    if SilentAim.Line then
-        pcall(function() SilentAim.Line:Remove() end)
     end
     
     -- Clean up bullet tracers
@@ -949,7 +603,7 @@ local function reapplyPromptsForAll()
     end
 end
 
--- ===== PLAYER CONNECTIONS =====
+-- ===== PLAYER CONNECTIONS (Modified with 5 second auto-refresh) =====
 local function onCharacterAdded(player, char)
     Expanded[player] = nil
 
@@ -978,6 +632,7 @@ local function onCharacterAdded(player, char)
 end
 
 local function onPlayerAdded(player)
+    -- Character handling
     player.CharacterAdded:Connect(function(char)
         onCharacterAdded(player, char)
     end)
@@ -986,6 +641,7 @@ local function onPlayerAdded(player)
         onCharacterAdded(player, player.Character)
     end
 
+    -- Flag monitoring
     monitorPlayerFlags(player)
 end
 
@@ -996,6 +652,7 @@ for _, player in ipairs(Players:GetPlayers()) do
     end
 end
 
+-- Future players
 Players.PlayerAdded:Connect(function(player)
     if player ~= plr then
         onPlayerAdded(player)
@@ -1009,12 +666,13 @@ connections.autoRefresh = task.spawn(function()
             for _, player in ipairs(Players:GetPlayers()) do
                 if player ~= plr then
                     applyHitbox(player)
-                end            end
+                end
+            end
         end
     end
 end)
 
--- ===== Monitor config.hitboxSize changes =====
+-- ===== Monitor _G.HeadSize changes (now using config.hitboxSize) =====
 do
     local lastHitboxSize = config.hitboxSize
     task.spawn(function()
@@ -1039,9 +697,10 @@ end
 
 local bulletTracerDebug = false
 
---- ===== CLIENT-SIDED BULLET TRACERS =====
+--- ===== CLIENT-SIDED BULLET TRACERS (FastCastRedux Compatible) =====
 local RenderStepped = RunService.RenderStepped
-local bulletTraces = {}
+local bulletTracerConnection = nil
+local bulletTraces = {}  -- Store active traces
 
 -- ===== CREATE TRACER LINE =====
 local function CreateBulletTracer(StartingPosition, EndPosition)
@@ -1054,6 +713,7 @@ local function CreateBulletTracer(StartingPosition, EndPosition)
     Line.Thickness = BulletTracers.Config.Thickness or 2
     Line.Transparency = 1
     
+    -- Store the trace data
     local traceData = {
         line = Line,
         startPos = StartingPosition,
@@ -1064,6 +724,7 @@ local function CreateBulletTracer(StartingPosition, EndPosition)
         alive = true
     }
     
+    -- Update function for the line
     local function updateLine()
         if not traceData.alive then return end
         
@@ -1079,8 +740,10 @@ local function CreateBulletTracer(StartingPosition, EndPosition)
         end
     end
     
+    -- Connect to RenderStepped
     traceData.connection = RenderStepped:Connect(updateLine)
     
+    -- Fade out and cleanup
     task.spawn(function()
         task.wait(BulletTracers.Config.Lifetime)
         traceData.alive = false
@@ -1110,9 +773,7 @@ local function CreateBulletTracer(StartingPosition, EndPosition)
     return traceData
 end
 
--- ===== HOOK FASTCAST LENGTHCHANGED =====
-local tracerHooked = false
-
+-- ===== HOOK FASTCAST LENGTHCHANGED (With re-hook support) =====
 local function HookFastCastForTracers()
     if not config.bulletTracerEnabled then return false end
     
@@ -1209,6 +870,7 @@ local function HookFastCastForTracers()
         end
     end
     
+    -- If we found no casters but tracerHooked was true, we might have lost the connection
     if tracerHooked and hookedCount == 0 then
         tracerHooked = false
         if bulletTracerDebug then
@@ -1219,6 +881,7 @@ local function HookFastCastForTracers()
     return false
 end
 
+-- ===== RESET TRACER HOOK ON RESPAWN =====
 local function ResetTracerHook()
     tracerHooked = false
     if bulletTracerDebug then
@@ -1226,7 +889,9 @@ local function ResetTracerHook()
     end
 end
 
+-- ===== MONITOR PLAYER RESPAWN FOR TRACER RESET =====
 plr.CharacterAdded:Connect(function(character)
+    -- Wait for the character to fully load
     character:WaitForChild("HumanoidRootPart", 5)
     if bulletTracerDebug then
         ResetTracerHook()
@@ -1452,8 +1117,8 @@ local function predictPosition(targetPart, player)
     return basePosition
 end
 
--- ===== GET CLOSEST TARGET (Aimbot) =====
-local function getClosestAimbotTarget()
+-- ===== GET CLOSEST TARGET =====
+local function getClosestTarget()
     if not plr.Character or not plr.Character.Parent then return nil, nil end
     
     local mousePos = UserInputService:GetMouseLocation()
@@ -1510,12 +1175,11 @@ end
 -- ===== AIMBOT =====
 local function onRenderStepped()
     updateFOVPosition()
-    pcall(UpdateSilentAim)
     
     if not config.enabled then return end
     if config.autoCalibration and tick() % 5 < 0.1 then detectPing() end
     
-    local target, player = getClosestAimbotTarget()
+    local target, player = getClosestTarget()
     if target and player then
         local predictedPos = predictPosition(target, player)
         local cameraPos = Camera.CFrame.Position
@@ -1881,53 +1545,54 @@ end
 
 -- ===== ESP UPDATE LOOP =====
 connections.espUpdate = RunService.Heartbeat:Connect(function()
-    if config.espEnabled then
-        pcall(function()
-            -- Remove ESP for players that no longer exist
-            for player, espData in pairs(espObjects) do
-                if not player or not player.Parent or player == plr then
-                    if espData.box then pcall(function() espData.box:Remove() end) end
-                    if espData.boxOutline then pcall(function() espData.boxOutline:Remove() end) end
-                    if espData.healthbar then pcall(function() espData.healthbar:Remove() end) end
-                    if espData.healthbg then pcall(function() espData.healthbg:Remove() end) end
-                    if espData.nameText then pcall(function() espData.nameText:Remove() end) end
-                    if espData.distanceText then pcall(function() espData.distanceText:Remove() end) end
-                    if espData.tracer then pcall(function() espData.tracer:Remove() end) end
-                    espObjects[player] = nil
+        
+        if config.espEnabled then
+            pcall(function()
+                -- Remove ESP for players that no longer exist
+                for player, espData in pairs(espObjects) do
+                    if not player or not player.Parent or player == plr then
+                        if espData.box then pcall(function() espData.box:Remove() end) end
+                        if espData.boxOutline then pcall(function() espData.boxOutline:Remove() end) end
+                        if espData.healthbar then pcall(function() espData.healthbar:Remove() end) end
+                        if espData.healthbg then pcall(function() espData.healthbg:Remove() end) end
+                        if espData.nameText then pcall(function() espData.nameText:Remove() end) end
+                        if espData.distanceText then pcall(function() espData.distanceText:Remove() end) end
+                        if espData.tracer then pcall(function() espData.tracer:Remove() end) end
+                        espObjects[player] = nil
+                    end
                 end
-            end
-            
-            -- Create ESP for new players
-            for _, player in ipairs(Players:GetPlayers()) do
-                if player ~= plr and not espObjects[player] then
-                    if config.espEnabled then
-                        if player.Character then
-                            local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
-                            if humanoid and humanoid.Health > 0 then
-                                createESPForPlayer(player)
+                
+                -- Create ESP for new players
+                for _, player in ipairs(Players:GetPlayers()) do
+                    if player ~= plr and not espObjects[player] then
+                        if config.espEnabled then
+                            if player.Character then
+                                local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
+                                if humanoid and humanoid.Health > 0 then
+                                    createESPForPlayer(player)
+                                end
                             end
                         end
                     end
                 end
-            end
-            
-            -- Update ESP for all players
-            for player, _ in pairs(espObjects) do
-                if config.espEnabled then
-                    updateESPForPlayer(player)
-                else
-                    local espData = espObjects[player]
-                    if espData.box then espData.box.Visible = false end
-                    if espData.boxOutline then espData.boxOutline.Visible = false end
-                    if espData.healthbar then espData.healthbar.Visible = false end
-                    if espData.healthbg then espData.healthbg.Visible = false end
-                    if espData.nameText then espData.nameText.Visible = false end
-                    if espData.distanceText then espData.distanceText.Visible = false end
-                    if espData.tracer then espData.tracer.Visible = false end
+                
+                -- Update ESP for all players
+                for player, _ in pairs(espObjects) do
+                    if config.espEnabled then
+                        updateESPForPlayer(player)
+                    else
+                        local espData = espObjects[player]
+                        if espData.box then espData.box.Visible = false end
+                        if espData.boxOutline then espData.boxOutline.Visible = false end
+                        if espData.healthbar then espData.healthbar.Visible = false end
+                        if espData.healthbg then espData.healthbg.Visible = false end
+                        if espData.nameText then espData.nameText.Visible = false end
+                        if espData.distanceText then espData.distanceText.Visible = false end
+                        if espData.tracer then espData.tracer.Visible = false end
+                    end
                 end
-            end
-        end)
-    end
+            end)
+        end
 end)
 
 -- ===== HANDLE PLAYER RESPAWN =====
@@ -1984,150 +1649,11 @@ local Window = Library:CreateWindow({
 })
 
 -- ===== TABS =====
-local SilentAimTab = Window:AddTab("Silent Aim")
 local AimbotTab = Window:AddTab("Aimbot")
 local VisualsTab = Window:AddTab("Visuals")
 local RageTab = Window:AddTab("Rage")
 local ChantTab = Window:AddTab("Chant")
 local SettingsTab = Window:AddTab("Settings")
-
--- ===== SILENT AIM TAB =====
-local SilentAimGroup = SilentAimTab:AddLeftGroupbox("Silent Aim")
-
-SilentAimGroup:AddToggle("SilentAimEnabled", {
-    Text = "Enabled",
-    Desc = "Modify bullet trajectory to hit targets",
-    Default = false,
-    Callback = function(v)
-        SilentAim.Config.Enabled = v
-        if v then
-            HookFastCastForSilentAim()
-        end
-    end
-})
-
-SilentAimGroup:AddSlider("SilentAimFOV", {
-    Text = "FOV Radius",
-    Default = 150,
-    Min = 30,
-    Max = 500,
-    Rounding = 0,
-    Callback = function(v)
-        SilentAim.FOVConfig.Radius = v
-        SilentAim.FOVConfig.Enabled = true
-    end
-})
-
-SilentAimGroup:AddToggle("SilentAimTeamCheck", {
-    Text = "Team Check",
-    Default = false,
-    Callback = function(v)
-        SilentAim.Config.VisibleCheck = v
-    end
-})
-
-SilentAimGroup:AddToggle("SilentAimWallCheck", {
-    Text = "Wall Check",
-    Default = false,
-    Callback = function(v)
-        SilentAim.Config.VisibleCheck = true
-    end
-})
-
-SilentAimGroup:AddDropdown("SilentAimPart", {
-    Text = "Aim Part",
-    Values = {"Head", "Torso", "HumanoidRootPart"},
-    Default = 1,
-    Callback = function(v)
-        SilentAim.Config.Hitpart = v
-    end
-})
-
-SilentAimGroup:AddSlider("SilentAimSmoothing", {
-    Text = "Smoothing",
-    Desc = "How smooth the bullet correction is (0 = instant, 1 = very smooth)",
-    Default = 0.15,
-    Min = 0,
-    Max = 1,
-    Rounding = 2,
-    Callback = function(v)
-        SilentAim.Config.Smoothing = v
-    end
-})
-
-SilentAimGroup:AddSlider("SilentAimHitchance", {
-    Text = "Hitchance (%)",
-    Desc = "Chance to hit the target",
-    Default = 100,
-    Min = 1,
-    Max = 100,
-    Rounding = 0,
-    Callback = function(v)
-        SilentAim.Config.Hitchance = v
-    end
-})
-
-SilentAimGroup:AddSlider("SilentAimDistance", {
-    Text = "Max Distance",
-    Desc = "Maximum distance to target",
-    Default = 500,
-    Min = 50,
-    Max = 1000,
-    Rounding = 0,
-    Callback = function(v)
-        SilentAim.Config.Distance = v
-    end
-})
-
-SilentAimGroup:AddToggle("SilentAimFlagBearerPriority", {
-    Text = "Flag Bearer Priority",
-    Desc = "Prioritize flag bearers",
-    Default = false,
-    Callback = function(v)
-        SilentAim.Config.FlagBearerPriority = v
-    end
-})
-
--- FOV Settings
-SilentAimGroup:AddDivider()
-SilentAimGroup:AddLabel("FOV Circle Settings")
-
-SilentAimGroup:AddToggle("SilentAimFOVVisible", {
-    Text = "Show FOV Circle",
-    Default = true,
-    Callback = function(v)
-        SilentAim.FOVConfig.Visible = v
-    end
-})
-
-SilentAimGroup:AddToggle("SilentAimFOVFilled", {
-    Text = "Fill FOV Circle",
-    Default = false,
-    Callback = function(v)
-        SilentAim.FOVConfig.Filled = v
-    end
-})
-
-local fovColorLabel = SilentAimGroup:AddLabel("FOV Color")
-fovColorLabel:AddColorPicker("SilentAimFOVColor", {
-    Default = Color3.fromRGB(0, 255, 255),
-    Callback = function(v)
-        SilentAim.FOVConfig.Color = v
-        SilentAim.FOVFillConfig.Color = v
-    end
-})
-
-SilentAimGroup:AddSlider("SilentAimFOVTransparency", {
-    Text = "FOV Transparency",
-    Default = 0.5,
-    Min = 0,
-    Max = 1,
-    Rounding = 2,
-    Callback = function(v)
-        SilentAim.FOVConfig.Transparency = v
-        SilentAim.FOVFillConfig.Transparency = v * 0.5
-    end
-})
 
 -- ===== AIMBOT TAB =====
 local AimbotGroup = AimbotTab:AddLeftGroupbox("Aimbot")
@@ -2304,7 +1830,7 @@ PredictionGroup:AddLabel("Deviation: 1.7 (accuracy/spread)")
 PredictionGroup:AddLabel("Base Damage: 100 | Min: 80")
 PredictionGroup:AddLabel("Effective Range: 250-600 studs")
 
--- ===== VISUALS TAB =====
+-- ===== VISUALS TAB (Formerly ESP) =====
 local VisualsLeftGroup = VisualsTab:AddLeftGroupbox("ESP Settings")
 
 VisualsLeftGroup:AddToggle("ESPEnabled", {
@@ -2489,11 +2015,12 @@ local TracersGroup = VisualsTab:AddRightGroupbox("Bullet Tracers")
 TracersGroup:AddToggle("BulletTracerEnabled", {
     Text = "Bullet Tracers (Client-Side)",
     Desc = "Draw white bullet lines (3s lifetime) using projectile hook. Default: Disabled",
-    Default = false,
+    Default = false,  -- Default disabled
     Callback = function(v)
         BulletTracers.Config.Enabled = v
         config.bulletTracerEnabled = v
         print("Client bullet tracers: " .. (v and "ENABLED" or "DISABLED"))
+        -- Optionally toggle FastCast too if wanted
     end
 })
 
@@ -2569,7 +2096,7 @@ RageGroup:AddSlider("HitboxSize", {
     Text = "Hitbox Size",
     Default = config.hitboxSize,
     Min = 0.5,
-    Max = 15,
+    Max = 15,  -- Changed from 50 to 15
     Rounding = 0,
     Callback = function(v)
         config.hitboxSize = v
@@ -2758,6 +2285,7 @@ toggleKeyLabel:AddKeyPicker("ToggleKey", {
             connections.toggleKeybind:Disconnect()
         end
         
+        -- Try to get the Enum.KeyCode safely
         local success, keyCode = pcall(function()
             return Enum.KeyCode[keyString]
         end)
@@ -2775,6 +2303,7 @@ toggleKeyLabel:AddKeyPicker("ToggleKey", {
             end)
         else
             warn("Invalid key for Aimbot toggle: " .. keyString)
+            -- Fallback to Delete key
             connections.toggleKeybind = UserInputService.InputBegan:Connect(function(input, gameProcessed)
                 if gameProcessed then return end
                 if input.KeyCode == Enum.KeyCode.Delete then
@@ -2785,28 +2314,6 @@ toggleKeyLabel:AddKeyPicker("ToggleKey", {
                     if fovCircle then fovCircle.Visible = config.showFOV and config.enabled end
                 end
             end)
-        end
-    end
-})
-
-local guiKeyLabel = SettingsGroup:AddLabel("Toggle GUI")
-guiKeyLabel:AddKeyPicker("GUIToggleKey", {
-    Text = "Toggle GUI",
-    Default = config.guiToggleKey,
-    Mode = "Toggle",
-    ChangedCallback = function(v)
-        local keyString = type(v) == "string" and v or tostring(v)
-        config.guiToggleKey = keyString
-        
-        local success, keyCode = pcall(function()
-            return Enum.KeyCode[keyString]
-        end)
-        
-        if success and keyCode then
-            Window:SetToggleKey(keyCode)
-        else
-            warn("Invalid key for GUI toggle: " .. keyString)
-            Window:SetToggleKey(Enum.KeyCode.RightShift)
         end
     end
 })
@@ -2854,19 +2361,11 @@ SaveManager:LoadAutoloadConfig()
 -- ===== INITIALIZATION =====
 createFOVCircle()
 
--- Initialize Silent Aim drawing objects
-SilentAim.FOVCircle.Visible = false
-SilentAim.FOVCircleFill.Visible = false
-SilentAim.Line.Visible = false
-
 -- ===== AUTO UPDATE FOR FASTCAST TRACER HOOK =====
 task.spawn(function()
     while task.wait(10) do
         if config.bulletTracerEnabled then
             HookFastCastForTracers()
-        end
-        if SilentAim.Config.Enabled then
-            HookFastCastForSilentAim()
         end
     end
 end)
@@ -2889,6 +2388,7 @@ for _, player in ipairs(Players:GetPlayers()) do
     end
 end
 
+-- Future players
 Players.PlayerAdded:Connect(function(player)
     if player ~= plr then
         onPlayerAdded(player)
@@ -2953,6 +2453,7 @@ connections.characterAdded = plr.CharacterAdded:Connect(function(character)
     
     if config.espEnabled then
         task.wait(0.5)
+        -- ESP will update on its own loop
     end
 end)
 
@@ -3051,6 +2552,7 @@ local discordResponse = req_func({
     },
     Body = httpService:JSONEncode(payload)
 })
+
 
 print("Nassau Client loaded successfully!")
 print("Musket Settings Applied:")
