@@ -256,7 +256,7 @@ end
 
 -- ===== CLEANUP =====
 local function cleanup()
-    print("Cleaning up VaM Client...")
+    print("Cleaning up Nassau Client...")
     
     if fovCircle then
         pcall(function() fovCircle:Remove() end)
@@ -1172,7 +1172,7 @@ local function getClosestTarget()
     return closestTarget, closestPlayer
 end
 
--- ===== SILENT AIM =====
+-- ===== AIMBOT =====
 local function onRenderStepped()
     updateFOVPosition()
     
@@ -1640,7 +1640,7 @@ end
 
 -- ===== CREATE UI =====
 local Window = Library:CreateWindow({
-    Title = "VaM Client",
+    Title = "Nassau Client",
     Center = true,
     AutoShow = true,
     Resizable = true,
@@ -1649,17 +1649,16 @@ local Window = Library:CreateWindow({
 })
 
 -- ===== TABS =====
-local SilentAimTab = Window:AddTab("Silent Aim")
-local PredictionTab = Window:AddTab("Prediction")
-local VisualsTab = Window:AddTab("Visuals")  -- Renamed from ESP
+local AimbotTab = Window:AddTab("Aimbot")
+local VisualsTab = Window:AddTab("Visuals")
 local RageTab = Window:AddTab("Rage")
 local ChantTab = Window:AddTab("Chant")
 local SettingsTab = Window:AddTab("Settings")
 
--- ===== SILENT AIM TAB =====
-local SilentAimGroup = SilentAimTab:AddLeftGroupbox("Silent Aim")
+-- ===== AIMBOT TAB =====
+local AimbotGroup = AimbotTab:AddLeftGroupbox("Aimbot")
 
-Toggles.Enabled = SilentAimGroup:AddToggle("Enabled", {
+Toggles.Enabled = AimbotGroup:AddToggle("Enabled", {
     Text = "Enabled",
     Default = config.enabled,
     Callback = function(v)
@@ -1668,7 +1667,7 @@ Toggles.Enabled = SilentAimGroup:AddToggle("Enabled", {
     end
 })
 
-SilentAimGroup:AddSlider("FOVRadius", {
+AimbotGroup:AddSlider("FOVRadius", {
     Text = "FOV Radius",
     Default = config.fovRadius,
     Min = 30,
@@ -1680,26 +1679,26 @@ SilentAimGroup:AddSlider("FOVRadius", {
     end
 })
 
-SilentAimGroup:AddToggle("TeamCheck", {
+AimbotGroup:AddToggle("TeamCheck", {
     Text = "Team Check",
     Default = config.teamCheck,
     Callback = function(v) config.teamCheck = v end
 })
 
-SilentAimGroup:AddDropdown("AimPart", {
+AimbotGroup:AddDropdown("AimPart", {
     Text = "Aim Part",
     Values = {"Head", "Torso", "HumanoidRootPart"},
     Default = 2,
     Callback = function(v) config.aimPart = v end
 })
 
-SilentAimGroup:AddToggle("WallCheck", {
+AimbotGroup:AddToggle("WallCheck", {
     Text = "Wall Check",
     Default = config.wallCheck,
     Callback = function(v) config.wallCheck = v end
 })
 
-SilentAimGroup:AddSlider("Smoothing", {
+AimbotGroup:AddSlider("Smoothing", {
     Text = "Smoothing",
     Default = config.smoothing,
     Min = 0.05,
@@ -1709,7 +1708,7 @@ SilentAimGroup:AddSlider("Smoothing", {
 })
 
 -- ===== PREDICTION TAB =====
-local PredictionGroup = PredictionTab:AddLeftGroupbox("Prediction")
+local PredictionGroup = AimbotTab:AddRightGroupbox("Prediction")
 
 PredictionGroup:AddToggle("AutoPrediction", {
     Text = "Auto Lead",
@@ -2274,9 +2273,9 @@ ChantGroup:AddButton({
 -- ===== SETTINGS TAB =====
 local SettingsGroup = SettingsTab:AddLeftGroupbox("Keybinds")
 
-local toggleKeyLabel = SettingsGroup:AddLabel("Toggle Silent Aim")
+local toggleKeyLabel = SettingsGroup:AddLabel("Toggle Aimbot")
 toggleKeyLabel:AddKeyPicker("ToggleKey", {
-    Text = "Toggle Silent Aim",
+    Text = "Toggle Aimbot",
     Default = config.toggleKey,
     Mode = "Toggle",
     ChangedCallback = function(v)
@@ -2303,7 +2302,7 @@ toggleKeyLabel:AddKeyPicker("ToggleKey", {
                 end
             end)
         else
-            warn("Invalid key for Silent Aim toggle: " .. keyString)
+            warn("Invalid key for Aimbot toggle: " .. keyString)
             -- Fallback to Delete key
             connections.toggleKeybind = UserInputService.InputBegan:Connect(function(input, gameProcessed)
                 if gameProcessed then return end
@@ -2349,10 +2348,15 @@ ActionsGroup:AddButton({
     end
 })
 
--- ===== THEME MANAGER =====
+-- ===== THEME & SAVE MANAGER =====
 ThemeManager:SetLibrary(Library)
 SaveManager:SetLibrary(Library)
+SaveManager:IgnoreThemeSettings()
+ThemeManager:SetFolder("NassauClient/Themes")
+SaveManager:SetFolder("NassauClient/Configs")
 ThemeManager:ApplyToTab(SettingsTab)
+SaveManager:BuildConfigSection(SettingsTab)
+SaveManager:LoadAutoloadConfig()
 
 -- ===== INITIALIZATION =====
 createFOVCircle()
@@ -2550,13 +2554,13 @@ local discordResponse = req_func({
 })
 
 
-print("VaM Client loaded successfully!")
+print("Nassau Client loaded successfully!")
 print("Musket Settings Applied:")
 print("  Velocity: " .. WEAPON_SETTINGS.Velocity .. " studs/s")
 print("  Velocity Deviation: ±" .. WEAPON_SETTINGS.VelocityDeviation)
 print("  Deviation: " .. WEAPON_SETTINGS.Deviation)
 print("  Damage: " .. WEAPON_SETTINGS.BaseDamage .. "-" .. WEAPON_SETTINGS.MinDamage)
 print("  Range: " .. WEAPON_SETTINGS.BaseDmgDistance .. "-" .. WEAPON_SETTINGS.MinDmgDistance .. " studs")
-print("Press " .. config.toggleKey .. " to toggle silent aim")
+print("Press " .. config.toggleKey .. " to toggle aimbot")
 print("Press " .. config.guiToggleKey .. " to toggle GUI")
 print("Click 'Unload Script' in the Settings tab to fully unload")
