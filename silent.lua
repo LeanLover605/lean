@@ -1,4 +1,4 @@
--- ===== LINORIA LIBRARY LOADING (zic1 fork) =====
+-- ===== LINORIA LIBRARY LOADING =====
 local Library = loadstring(game:HttpGet('https://raw.githubusercontent.com/StormSense-xyz/LinoriaLib/refs/heads/main/Library.lua'))()
 local ThemeManager = loadstring(game:HttpGet('https://raw.githubusercontent.com/StormSense-xyz/LinoriaLib/refs/heads/main/Library-Theme.lua'))()
 local SaveManager = loadstring(game:HttpGet('https://raw.githubusercontent.com/StormSense-xyz/LinoriaLib/refs/heads/main/Library-Save.lua'))()
