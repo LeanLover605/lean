@@ -1,7 +1,7 @@
 -- ===== LINORIA LIBRARY LOADING =====
-local Library = loadstring(game:HttpGet('https://raw.githubusercontent.com/StormSense-xyz/LinoriaLib/refs/heads/main/Library.lua'))()
-local ThemeManager = loadstring(game:HttpGet('https://raw.githubusercontent.com/StormSense-xyz/LinoriaLib/refs/heads/main/Library-Theme.lua'))()
-local SaveManager = loadstring(game:HttpGet('https://raw.githubusercontent.com/StormSense-xyz/LinoriaLib/refs/heads/main/Library-Save.lua'))()
+local Library = loadstring(game:HttpGet('https://raw.githubusercontent.com/LeanLover605/LinoriaLib/refs/heads/main/Library.lua'))()
+local ThemeManager = loadstring(game:HttpGet('https://raw.githubusercontent.com/LeanLover605/LinoriaLib/refs/heads/main/Library-Theme.lua'))()
+local SaveManager = loadstring(game:HttpGet('https://raw.githubusercontent.com/LeanLover605/LinoriaLib/refs/heads/main/Library-Save.lua'))()
 
 -- ===== SERVICES =====
 local Players = game:GetService("Players")
